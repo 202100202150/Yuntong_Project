@@ -1,0 +1,25 @@
+services:
+  uavguard:
+    build: .
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      UAVGUARD_CONFIG: /app/config/production.yaml
+      TZ: Asia/Shanghai
+    volumes:
+      - ./config/production.yaml:/app/config/production.yaml:ro
+      - ./calibration/site-cam01.yaml:/app/calibration/site-cam01.yaml:ro
+      - ./calibration/site-cam02.yaml:/app/calibration/site-cam02.yaml:ro
+      - ./models:/app/models:ro
+      - ./data:/app/data
+      - ./records:/app/records
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+

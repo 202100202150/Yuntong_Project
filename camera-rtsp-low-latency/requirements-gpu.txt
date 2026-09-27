@@ -1,0 +1,26 @@
+# GPU runtime for the dual-camera sidecar on CPython 3.12.13 x64.
+# All packages are exact pins.
+#
+# Do not add opencv-python/opencv-contrib-python here. CUDA-enabled OpenCV
+# is built from the official 5.0.0 sources and linked into the isolated GPU
+# venv by scripts/gpu/build-opencv-cuda.ps1.
+av==18.1.0
+numpy==2.5.1
+python-dotenv==1.2.3
+requests==2.34.2
+certifi==2026.7.22
+charset-normalizer==3.4.9
+idna==3.18
+urllib3==2.7.0
+
+# NVIDIA TensorRT 11.3 for CUDA 12. The Windows bindings and runtime libraries
+# are pinned together. setup-gpu-env.ps1 separately installs the source-only
+# tensorrt-cu12 frontend package, which provides the `import tensorrt` shim.
+tensorrt-cu12-bindings==11.3.0.99
+tensorrt-cu12-libs==11.3.0.99
+
+# TensorRT integration uses cuda.bindings.runtime. Keep the meta package and
+# generated bindings on the same CUDA Python 12.9 patch release.
+cuda-python==12.9.7
+cuda-bindings==12.9.7
+cuda-pathfinder==1.8.1

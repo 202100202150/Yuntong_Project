@@ -1,0 +1,65 @@
+cameras:
+  - camera_id: cam01
+    source: ${CAM01_RTSP_URL}
+    source_type: rtsp
+    calibration: ../calibration/site-cam01.yaml
+    fps: 25
+    # Apply the value measured by tools/sync_flash.py.
+    timestamp_offset_ms: 0.0
+    record: true
+    # Normalized [x,y] polygons. Keep only sky and exclude buildings/windows.
+    mask_polygons:
+      - [[0.0, 0.0], [1.0, 0.0], [1.0, 0.82], [0.0, 0.82]]
+  - camera_id: cam02
+    source: ${CAM02_RTSP_URL}
+    source_type: rtsp
+    calibration: ../calibration/site-cam02.yaml
+    fps: 25
+    timestamp_offset_ms: 0.0
+    record: true
+    mask_polygons:
+      - [[0.0, 0.0], [1.0, 0.0], [1.0, 0.82], [0.0, 0.82]]
+
+motion:
+  history: 200
+  var_threshold: 12
+  diff_threshold: 8
+  min_area_px: 3
+  max_dimension_px: 80
+  learning_rate: 0.005
+  stabilize: true
+
+stereo:
+  sync_tolerance_ms: 20
+  epipolar_threshold_px: 2.5
+  reprojection_threshold_px: 2.5
+  minimum_crossing_angle_deg: 3.0
+  minimum_range_m: 50
+  maximum_range_m: 350
+  pixel_sigma: 1.5
+
+tracking:
+  confirm_hits: 5
+  confirm_window: 8
+  max_missed_s: 2.0
+  association_distance_m: 30
+
+classifier:
+  model_path: ../models/uav-roi-classifier.onnx
+  input_size: 128
+  minimum_confidence: 0.65
+  providers: [CUDAExecutionProvider, CPUExecutionProvider]
+
+storage:
+  database_path: ../data/uavguard.db
+  recording_directory: ../records
+  retention_days: 30
+  segment_seconds: 300
+
+service:
+  host: 0.0.0.0
+  port: 8080
+  webhook_url: ${UAVGUARD_WEBHOOK_URL:-}
+  demo_mode: false
+  auth_username: ${UAVGUARD_AUTH_USERNAME:-uavguard}
+  auth_password: ${UAVGUARD_AUTH_PASSWORD}

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>UAVGuard 校园空域监测</title>
+  <style>
+    :root { color-scheme: dark; --bg:#071019; --panel:#101d29; --line:#24384a; --muted:#8ea4b8; --ok:#50d890; --warn:#ffc857; --bad:#ff6b6b; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:#eaf2f8; font:14px/1.45 system-ui,"Microsoft YaHei",sans-serif; }
+    header { display:flex; align-items:center; justify-content:space-between; padding:16px 22px; border-bottom:1px solid var(--line); }
+    h1 { font-size:19px; margin:0; letter-spacing:.04em; }
+    #system-state { color:var(--muted); }
+    main { padding:16px; display:grid; gap:16px; }
+    .cameras { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+    .panel-title { padding:9px 12px; color:var(--muted); border-bottom:1px solid var(--line); display:flex; justify-content:space-between; }
+    .camera img { display:block; width:100%; aspect-ratio:16/9; object-fit:cover; background:#03080d; }
+    .lower { display:grid; grid-template-columns:minmax(360px,1fr) minmax(480px,1.4fr); gap:16px; }
+    canvas { width:100%; height:350px; display:block; }
+    table { width:100%; border-collapse:collapse; }
+    th,td { padding:9px 10px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
+    th { color:var(--muted); font-weight:600; }
+    .empty { text-align:center; color:var(--muted); padding:32px; }
+    .pill { display:inline-block; padding:2px 7px; border-radius:99px; background:#213547; }
+    .confirmed { color:var(--ok); }
+    .candidate { color:var(--warn); }
+    .lost { color:var(--bad); }
+    @media(max-width:900px){ .cameras,.lower{grid-template-columns:1fr;} }
+  </style>
+</head>
+<body>
+  <header><h1>UAVGuard · 校园双摄空域监测</h1><div id="system-state">正在连接…</div></header>
+  <main>
+    <section class="cameras" id="cameras"></section>
+    <section class="lower">
+      <div class="panel">
+        <div class="panel-title"><span>ENU俯视轨迹</span><span>北 ↑ · 东 →</span></div>
+        <canvas id="map" width="800" height="500"></canvas>
+      </div>
+      <div class="panel">
+        <div class="panel-title"><span>活动目标</span><span id="sync">同步：--</span></div>
+        <div style="overflow:auto;max-height:350px">
+          <table><thead><tr><th>ID</th><th>状态</th><th>类别</th><th>ENU坐标/m</th><th>速度/m·s⁻¹</th><th>误差/m</th></tr></thead><tbody id="tracks"></tbody></table>
+        </div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="panel-title"><span>确认事件</span><span>仅确认与丢失状态落库</span></div>
+      <div style="overflow:auto;max-height:240px">
+        <table><thead><tr><th>时间</th><th>ID</th><th>状态</th><th>类别</th><th>坐标</th><th>重投影误差</th><th>录像</th></tr></thead><tbody id="events"></tbody></table>
+      </div>
+    </section>
+  </main>
+  <script>
+    const active = new Map();
+    const trails = new Map();
+    const fmt = v => Number(v).toFixed(1);
+    async function bootstrap(){
+      const cfg = await fetch('/api/v1/config').then(r=>r.json());
+      const root = document.querySelector('#cameras');
+      cfg.cameraIds.forEach(id=>{
+        root.insertAdjacentHTML('beforeend', `<article class="panel camera"><div class="panel-title"><span>${id}</span><span id="health-${id}">等待视频</span></div><img src="/api/v1/cameras/${id}/mjpeg" alt="${id}"></article>`);
+      });
+      connectWs(); refresh(); setInterval(refresh, 2000); setInterval(refreshEvents, 5000);
+    }
+    function connectWs(){
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${protocol}//${location.host}/ws/tracks`);
+      ws.onmessage = event => { const track=JSON.parse(event.data); if(track.state==='lost') active.delete(track.trackId); else active.set(track.trackId,track); if(track.state==='confirmed'){ const t=trails.get(track.trackId)||[]; t.push(track.positionEnuM); if(t.length>100)t.shift(); trails.set(track.trackId,t); } renderTracks(); drawMap(); };
+      ws.onclose = () => setTimeout(connectWs,1500);
+    }
+    async function refresh(){
+      try {
+        const [health,tracks] = await Promise.all([fetch('/api/v1/health').then(r=>r.json()),fetch('/api/v1/tracks/active').then(r=>r.json())]);
+        document.querySelector('#system-state').textContent = health.status==='healthy' ? '● 系统正常' : '● 系统降级';
+        document.querySelector('#system-state').style.color = health.status==='healthy' ? 'var(--ok)' : 'var(--warn)';
+        health.cameras.forEach(c=>{const el=document.querySelector(`#health-${c.cameraId}`);if(el)el.textContent=`${c.status} · ${c.averageFps} fps`;});
+        const p=health.stereo.syncResidualP95Ms; document.querySelector('#sync').textContent=`同步P95：${p==null?'--':fmt(p)+' ms'}`;
+        tracks.tracks.forEach(t=>active.set(t.trackId,t)); renderTracks(); drawMap();
+      } catch(e){ document.querySelector('#system-state').textContent='连接失败'; document.querySelector('#system-state').style.color='var(--bad)'; }
+    }
+    function renderTracks(){
+      const tbody=document.querySelector('#tracks'); const items=[...active.values()];
+      if(!items.length){tbody.innerHTML='<tr><td class="empty" colspan="6">暂无活动目标</td></tr>';return;}
+      tbody.innerHTML=items.map(t=>`<tr><td>${t.trackId}</td><td class="${t.state}">${t.state}</td><td><span class="pill">${t.class}</span></td><td>${t.positionEnuM.map(fmt).join(', ')}</td><td>${fmt(Math.hypot(...t.velocityEnuMps))}</td><td>${t.positionStdM.map(fmt).join(', ')}</td></tr>`).join('');
+    }
+    function drawMap(){
+      const canvas=document.querySelector('#map'),ctx=canvas.getContext('2d'),w=canvas.width,h=canvas.height;ctx.fillStyle='#0a151f';ctx.fillRect(0,0,w,h);
+      ctx.strokeStyle='#24384a';ctx.lineWidth=1;for(let x=0;x<=w;x+=80){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,h);ctx.stroke();}for(let y=0;y<=h;y+=50){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(w,y);ctx.stroke();}
+      const project=p=>[w/2+p[0]*2,h-20-p[1]*1.45];
+      for(const [id,points] of trails){if(points.length<2)continue;ctx.strokeStyle='#50d890';ctx.lineWidth=2;ctx.beginPath();points.forEach((p,i)=>{const q=project(p);i?ctx.lineTo(...q):ctx.moveTo(...q)});ctx.stroke();}
+      for(const t of active.values()){const [x,y]=project(t.positionEnuM);ctx.fillStyle=t.state==='confirmed'?'#50d890':'#ffc857';ctx.beginPath();ctx.arc(x,y,6,0,Math.PI*2);ctx.fill();ctx.fillStyle='#eaf2f8';ctx.fillText(`${t.trackId} z=${fmt(t.positionEnuM[2])}m`,x+10,y-8);}
+      ctx.fillStyle='#8ea4b8';ctx.fillText('相对校园ENU原点',12,22);
+    }
+    async function refreshEvents(){
+      const events=await fetch('/api/v1/events?limit=30').then(r=>r.json()).catch(()=>({events:[]}));
+      const tbody=document.querySelector('#events');if(!events.events.length){tbody.innerHTML='<tr><td class="empty" colspan="7">尚无确认事件</td></tr>';return;}
+      tbody.innerHTML=events.events.map(e=>{const segments=e.metadata?.recordingSegments||{};const links=Object.entries(segments).map(([id,path])=>`<a href="/api/v1/recordings/${encodeURI(path)}" target="_blank">${id}</a>`).join(' · ')||'--';return `<tr><td>${new Date(e.timestampUtc).toLocaleString()}</td><td>${e.trackId}</td><td class="${e.state}">${e.state}</td><td>${e.class}</td><td>${e.positionEnuM.map(fmt).join(', ')}</td><td>${fmt(e.reprojectionErrorPx)} px</td><td>${links}</td></tr>`}).join('');
+    }
+    bootstrap();
+  </script>
+</body>
+</html>

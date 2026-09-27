@@ -1,0 +1,22 @@
+[Unit]
+Description=UAVGuard dual-camera tracking service
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
+
+[Service]
+Type=simple
+User=uavguard
+Group=uavguard
+WorkingDirectory=/opt/uavguard
+EnvironmentFile=/opt/uavguard/.env
+ExecStart=/opt/uavguard/.venv/bin/uavguard --config /opt/uavguard/config/production.yaml
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/uavguard/data /opt/uavguard/records
+
+[Install]
+WantedBy=multi-user.target

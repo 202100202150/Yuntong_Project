@@ -1,0 +1,17 @@
+.spatial-scene { position: absolute; inset: 0; overflow: hidden; background: #e8eef4; }
+.spatial-scene canvas { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+.spatial-scene canvas:active { cursor: grabbing; }
+.spatial-scene-title, .spatial-scene-hint, .spatial-scene-readout, .spatial-scene-legend, .spatial-reset { position: absolute; z-index: 2; }
+.spatial-scene-title { top: 18px; left: 20px; display: grid; gap: 4px; color: #24364c; }
+.spatial-scene-title strong { font-size: 14px; letter-spacing: .2px; }
+.spatial-scene-title span { color: #238061; font-size: 10px; }
+.spatial-scene-hint { top: 20px; right: 20px; color: #8494a5; font-size: 10px; }
+.spatial-scene-hint::after { content: ' · 水平 360°'; color: #9aa9b8; }
+.spatial-reset { top: 45px; right: 18px; padding: 6px 9px; border: 1px solid #cad6e2; border-radius: 7px; color: #597089; background: rgba(255,255,255,.86); font-size: 10px; cursor: pointer; }
+.spatial-reset:hover { color: #235f96; background: #fff; }
+.spatial-scene-legend { left: 20px; bottom: 62px; display: flex; gap: 12px; color: #62758a; font-size: 10px; }
+.spatial-scene-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.spatial-scene-legend i { width: 8px; height: 8px; display: inline-block; border-radius: 50%; }
+.spatial-scene-legend .axis-x { background: #d24f55; } .spatial-scene-legend .axis-y { background: #3b9a69; } .spatial-scene-legend .axis-z { background: #3979b8; } .spatial-scene-legend .target { background: #1d9b72; }
+.spatial-scene-readout { right: 20px; bottom: 82px; max-width: calc(100% - 40px); color: #526a81; font-size: 10px; text-align: right; }
+.spatial-matching-detail { display: block; margin-top: 2px; line-height: 1.35; overflow-wrap: anywhere; }

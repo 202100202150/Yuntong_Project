@@ -1,0 +1,72 @@
+# Secrets and local configuration
+**/.env
+**/.env.*
+!**/.env.example
+**/*.pem
+**/*.key
+**/*.pfx
+**/*.p12
+
+# IDE and operating-system files
+**/.idea/
+**/.vscode/
+.DS_Store
+Thumbs.db
+
+# Node.js and Electron
+desktop-app/node_modules/
+desktop-app/desktop-dist/
+desktop-app/dist/
+desktop-app/out/
+desktop-app/release/
+desktop-app/coverage/
+desktop-app/.vite/
+
+# Python environments and caches
+**/.venv/
+**/.venv-*/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# GPU builds and generated caches
+desktop-app/work/
+camera-rtsp-low-latency/work/
+**/*.engine
+**/*.plan
+**/*.trt
+
+# Training datasets, runs and source weights
+desktop-app/training/datasets/
+desktop-app/training/runs/
+desktop-app/training/raw/
+desktop-app/weights/
+desktop-app/yolo*.pt
+desktop-app/models/*.pt
+desktop-app/models/*.onnx
+desktop-app/models/*.sha256.txt
+!desktop-app/models/.gitkeep
+!desktop-app/models/MODEL_CARD_TEMPLATE.md
+*.cache
+
+# Runtime outputs and camera media
+desktop-app/outputs/*
+!desktop-app/outputs/.gitkeep
+camera-rtsp-low-latency/outputs/*
+!camera-rtsp-low-latency/outputs/.gitkeep
+camera*_snapshot_*.png
+camera*_snapshot_*.jpg
+camera*_video_*.mp4
+camera*_video_*.mkv
+*.log
+
+# Installers and package artifacts
+*.exe
+*.msi
+*.blockmap
+*.nupkg
+*.dmg
+*.AppImage
+

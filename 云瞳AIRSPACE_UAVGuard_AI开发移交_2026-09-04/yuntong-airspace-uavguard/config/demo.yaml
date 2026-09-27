@@ -1,0 +1,54 @@
+cameras:
+  - camera_id: cam01
+    source: synthetic
+    source_type: synthetic
+    calibration: ../calibration/demo-cam01.yaml
+    fps: 10
+    record: false
+  - camera_id: cam02
+    source: synthetic
+    source_type: synthetic
+    calibration: ../calibration/demo-cam02.yaml
+    fps: 10
+    record: false
+
+motion:
+  history: 80
+  var_threshold: 10
+  diff_threshold: 6
+  min_area_px: 3
+  max_dimension_px: 40
+  learning_rate: 0.01
+  stabilize: false
+
+stereo:
+  sync_tolerance_ms: 30
+  epipolar_threshold_px: 3.0
+  reprojection_threshold_px: 3.0
+  minimum_crossing_angle_deg: 3.0
+  minimum_range_m: 50
+  maximum_range_m: 350
+  pixel_sigma: 1.5
+
+tracking:
+  confirm_hits: 5
+  confirm_window: 8
+  max_missed_s: 2.0
+  association_distance_m: 30
+
+classifier:
+  model_path:
+  input_size: 128
+  minimum_confidence: 0.65
+
+storage:
+  database_path: ../data/demo-uavguard.db
+  recording_directory: ../records
+  retention_days: 30
+  segment_seconds: 300
+
+service:
+  host: 127.0.0.1
+  port: 8080
+  demo_mode: true
+

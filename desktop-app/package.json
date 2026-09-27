@@ -1,0 +1,83 @@
+{
+  "name": "yuntong-detection-workbench",
+  "version": "0.1.1",
+  "description": "云瞳双摄像机实时 ONNX 人体检测工作台",
+  "author": "云瞳",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "vite --config desktop/vite.config.ts",
+    "build": "npm run desktop:build-renderer",
+    "desktop:build-renderer": "vite build --config desktop/vite.config.ts",
+    "desktop:run": "npm run desktop:build-renderer && electron .",
+    "desktop:dist": "npm run desktop:build-renderer && electron-builder --win nsis --x64",
+    "lint": "oxlint",
+    "dataset:coco-person": "node training/download-coco-person.mjs",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "1.31.0",
+    "onnxruntime-web": "^1.30.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3",
+    "oxlint": "1.76.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "typescript": "5.9.3",
+    "vite": "8.2.2"
+  },
+  "build": {
+    "appId": "cn.yuntong.detectionworkbench",
+    "productName": "云瞳检测工作台",
+    "executableName": "YuntongWorkbench",
+    "asar": true,
+    "asarUnpack": [
+      "desktop-dist/models/**/*"
+    ],
+    "npmRebuild": false,
+    "directories": {
+      "output": "outputs",
+      "buildResources": "desktop/assets"
+    },
+    "files": [
+      "desktop/main.cjs",
+      "desktop/preload.cjs",
+      "desktop/assets/**/*",
+      "desktop-dist/**/*",
+      "package.json",
+      "!node_modules/**/*"
+    ],
+    "win": {
+      "icon": "desktop/assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Yuntong-Detection-Workbench-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "云瞳检测工作台",
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}
