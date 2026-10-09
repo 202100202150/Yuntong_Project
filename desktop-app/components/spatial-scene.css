@@ -5,8 +5,13 @@
 .spatial-scene-title { top: 18px; left: 20px; display: grid; gap: 4px; color: #24364c; }
 .spatial-scene-title strong { font-size: 14px; letter-spacing: .2px; }
 .spatial-scene-title span { color: #238061; font-size: 10px; }
+.spatial-mode-switch { position: absolute; z-index: 3; top: 18px; left: 142px; display: flex; margin: 0; min-width: 0; padding: 3px; border: 1px solid #cad6e2; border-radius: 8px; background: rgba(255,255,255,.86); }
+.spatial-mode-switch button { width: 52px; height: 26px; border: 0; border-radius: 5px; background: transparent; color: #597089; font-size: 12px; font-weight: 700; cursor: pointer; }
+.spatial-mode-switch button[aria-pressed="true"] { background: #3979b8; color: #fff; }
+.spatial-mode-switch button:focus-visible { outline: 2px solid #235f96; outline-offset: 2px; }
 .spatial-scene-hint { top: 20px; right: 20px; color: #8494a5; font-size: 10px; }
 .spatial-scene-hint::after { content: ' · 水平 360°'; color: #9aa9b8; }
+.spatial-scene--2d .spatial-scene-hint::after { content: none; }
 .spatial-reset { top: 45px; right: 18px; padding: 6px 9px; border: 1px solid #cad6e2; border-radius: 7px; color: #597089; background: rgba(255,255,255,.86); font-size: 10px; cursor: pointer; }
 .spatial-reset:hover { color: #235f96; background: #fff; }
 .spatial-scene-legend { left: 20px; bottom: 62px; display: flex; gap: 12px; color: #62758a; font-size: 10px; }
