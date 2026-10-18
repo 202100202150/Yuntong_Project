@@ -1,0 +1,33 @@
+{
+  "WorkRoot": "E:\\Yuntong_Project-master\\Yuntong_Project-master\\work\\campus-recenter-20261008-201405",
+  "ProjectRoot": "E:\\Yuntong_Project-master\\Yuntong_Project-master",
+  "CreatedAt": "2026-10-08T20:14:05.9109043+08:00",
+  "BackupRoot": "E:\\Yuntong_Project-master\\Yuntong_Project-master\\outputs\\campus-recenter-20261008-201405",
+  "OriginalSHA256": "C16A31B5FBC76AAA9834F079E60A69566D335482C34F2A77EE84EFDC06319CFE",
+  "ModifiedFiles": [
+    "desktop-app/lib/campus-buildings.ts"
+  ],
+  "CurrentSHA256": "41D5D28584D8E5C7210CE089AC1B3380603ED1F9535D4703C40B6A0C2653995A",
+  "Scale": 1.17,
+  "Centering": "All six buildings, full X/Z footprint bounds including roofs, center at (0,0)",
+  "Bounds": {
+    "Y": [
+      0,
+      1.7784
+    ],
+    "X": [
+      -5.4873,
+      5.4873
+    ],
+    "Z": [
+      -4.068675,
+      4.068675
+    ]
+  },
+  "Validation": {
+    "Build": "passed",
+    "Typecheck": "passed",
+    "Lint": "passed",
+    "Preview": "browser, rotated with original controls, synthetic detections"
+  }
+}

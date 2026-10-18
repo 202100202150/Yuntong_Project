@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+.env
+data/
+records/
+models/*.onnx
+models/*.engine
+calibration/site-*.yaml
+config/production.yaml

@@ -1,0 +1,4 @@
+av==18.1.0
+opencv-python==5.0.0.93
+python-dotenv==1.2.3
+requests==2.34.2

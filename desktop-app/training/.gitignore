@@ -1,0 +1,17 @@
+.venv/
+raw/*
+!raw/.gitkeep
+frames/*
+!frames/.gitkeep
+runs/*
+!runs/.gitkeep
+requirements-lock.txt
+datasets/person-v1/images/**/*.jpg
+datasets/person-v1/images/**/*.jpeg
+datasets/person-v1/images/**/*.png
+datasets/person-v1/images/**/*.webp
+datasets/person-v1/labels/**/*.txt
+datasets/coco-person-2017/_downloads/
+datasets/coco-person-2017/images/
+datasets/coco-person-2017/labels/
+datasets/coco-person-2017/download-summary.json

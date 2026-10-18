@@ -1,0 +1,116 @@
+diff --git "a/E:\\Yuntong_Project-master\\Yuntong_Project-master\\outputs\\campus-recenter-20261008-201405\\campus-buildings.before.ts" "b/E:\\Yuntong_Project-master\\Yuntong_Project-master\\desktop-app\\lib\\campus-buildings.ts"
+index 0e1bd89..ee18560 100644
+--- "a/E:\\Yuntong_Project-master\\Yuntong_Project-master\\outputs\\campus-recenter-20261008-201405\\campus-buildings.before.ts"
++++ "b/E:\\Yuntong_Project-master\\Yuntong_Project-master\\desktop-app\\lib\\campus-buildings.ts"
+@@ -4,17 +4,16 @@ type ProjectPoint = (point: Point3) => ProjectedPoint;
+ type Block = { x: number; z: number; width: number; depth: number; bottom: number; top: number };
+ type CampusBuilding = {
+   code: string;
+-  label: string[];
+   x: number;
+   z: number;
+   heightMeters: number;
+   blocks: Block[];
+ };
+ 
+-// Campus massing only: one scene unit represents 50 model metres, with the
+-// same scale on X/Y/Z. East is +X and north is -Z. Footprints and distances
+-// approximate the official campus map; unpublished heights are estimates.
+-// This scale never changes camera triangulation or detection coordinates.
++// The base campus model uses 50 model metres per unit on X/Y/Z. East is +X
++// and north is -Z. Footprints approximate the official map; heights include
++// estimates. The final layout below is centered and enlarged uniformly.
++// These model transforms never change camera or detection coordinates.
+ const MODEL_METERS_PER_UNIT = 50;
+ function block(x: number, z: number, width: number, depth: number, topMeters: number, bottomMeters = 0): Block {
+   return { x, z, width, depth, bottom: bottomMeters / MODEL_METERS_PER_UNIT, top: topMeters / MODEL_METERS_PER_UNIT };
+@@ -30,37 +29,62 @@ function courtyard(width: number, depth: number, heightMeters: number): Block[]
+   ];
+ }
+ 
+-export const campusBuildings: CampusBuilding[] = [
++const campusLayout: CampusBuilding[] = [
+   {
+-    code: 'C5', label: ['C-5 教学楼'], x: -1.45, z: -4.8, heightMeters: 28.75,
++    code: 'C5', x: -1.45, z: -4.8, heightMeters: 28.75,
+     // Five-storey teaching building with six wings joined by a spine.
+     blocks: [block(0, 0.73, 3.9, 0.34, 28.75), ...[-1.75, -1.05, -0.35, 0.35, 1.05, 1.75].map((x) => block(x, -0.05, 0.4, 1.56, 28.75))],
+   },
+   {
+-    code: 'C3', label: ['行政楼'], x: -1.25, z: -2.2, heightMeters: 68,
++    code: 'C3', x: -1.25, z: -2.2, heightMeters: 68,
+     blocks: [block(0, 0, 2.05, 1.35, 16), block(-0.3, -0.16, 0.76, 0.92, 68, 16)],
+   },
+   {
+-    code: 'D3', label: ['中德智能制造学院'], x: 4.1, z: -2.25, heightMeters: 76,
++    code: 'D3', x: 4.1, z: -2.25, heightMeters: 76,
+     // Officially a four-storey podium and an eighteen-storey tower.
+     blocks: [block(0, 0, 2.12, 1.68, 18), block(0.2, -0.14, 0.62, 1.16, 76, 18)],
+   },
+   {
+-    code: 'C2', label: ['图书馆'], x: -1.25, z: 0.4, heightMeters: 36,
++    code: 'C2', x: -1.25, z: 0.4, heightMeters: 36,
+     // Broad overhanging roof echoes the library's graduation-cap silhouette.
+     blocks: [block(0, 0, 2.05, 1.36, 32), block(0, 0, 2.76, 1.85, 36, 32)],
+   },
+   {
+-    code: 'C1', label: ['人工智能学院'], x: 1.55, z: 0.4, heightMeters: 52,
++    code: 'C1', x: 1.55, z: 0.4, heightMeters: 52,
+     blocks: [...courtyard(2.35, 1.72, 18), block(-0.68, -0.25, 0.68, 1.04, 52, 18)],
+   },
+   {
+-    code: 'D1', label: ['城市交通与', '物流学院'], x: 4.8, z: 0.4, heightMeters: 48,
++    code: 'D1', x: 4.8, z: 0.4, heightMeters: 48,
+     // The official photo shows a courtyard podium and a higher eastern tower.
+     blocks: [...courtyard(2.36, 1.76, 23), block(0.76, -0.21, 0.6, 1.08, 48, 23)],
+   },
+ ];
+ 
++// Center the complete footprint (including roof overhangs) on the origin.
++// A 17% uniform enlargement leaves over half a grid unit at both X edges.
++const footprints = campusLayout.flatMap((building) => building.blocks.map((volume) => ({
++  minX: building.x + volume.x - volume.width / 2,
++  maxX: building.x + volume.x + volume.width / 2,
++  minZ: building.z + volume.z - volume.depth / 2,
++  maxZ: building.z + volume.z + volume.depth / 2,
++})));
++const centerX = (Math.min(...footprints.map((footprint) => footprint.minX)) + Math.max(...footprints.map((footprint) => footprint.maxX))) / 2;
++const centerZ = (Math.min(...footprints.map((footprint) => footprint.minZ)) + Math.max(...footprints.map((footprint) => footprint.maxZ))) / 2;
++const CAMPUS_SCALE = 1.17;
++export const campusBuildings: CampusBuilding[] = campusLayout.map((building) => ({
++  ...building,
++  x: (building.x - centerX) * CAMPUS_SCALE,
++  z: (building.z - centerZ) * CAMPUS_SCALE,
++  blocks: building.blocks.map((volume) => ({
++    x: volume.x * CAMPUS_SCALE,
++    z: volume.z * CAMPUS_SCALE,
++    width: volume.width * CAMPUS_SCALE,
++    depth: volume.depth * CAMPUS_SCALE,
++    bottom: volume.bottom * CAMPUS_SCALE,
++    top: volume.top * CAMPUS_SCALE,
++  })),
++}));
++
+ export function drawCampusBuildings(context: CanvasRenderingContext2D, project: ProjectPoint): void {
+   const faces: { points: ProjectedPoint[]; depth: number; color: string }[] = [];
+   const surfaces = [
+@@ -104,19 +128,5 @@ export function drawCampusBuildings(context: CanvasRenderingContext2D, project:
+     context.fill();
+     context.stroke();
+   }
+-  context.font = '600 10px Inter, "Microsoft YaHei", sans-serif';
+-  context.textAlign = 'center';
+-  context.textBaseline = 'middle';
+-  for (const building of campusBuildings) {
+-    const anchor = project({ x: building.x, y: building.heightMeters / MODEL_METERS_PER_UNIT, z: building.z });
+-    const lines = building.label;
+-    const labelWidth = Math.max(...lines.map((text) => context.measureText(text).width)) + 12;
+-    const labelHeight = lines.length * 14 + 6;
+-    const labelY = anchor.y - labelHeight - 6;
+-    context.fillStyle = 'rgba(255, 249, 240, 0.94)';
+-    context.fillRect(anchor.x - labelWidth / 2, labelY, labelWidth, labelHeight);
+-    context.fillStyle = '#775132';
+-    lines.forEach((text, index) => context.fillText(text, anchor.x, labelY + 10 + index * 14));
+-  }
+   context.restore();
+ }

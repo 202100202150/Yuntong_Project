@@ -1,0 +1,6 @@
+{
+  "RelativePath": "desktop-app\\components\\spatial-scene.tsx",
+  "OriginalSHA256": "56E62A3B7F51B7D4149C67E8B7FF98BBA073AADC9563CA68B3CE40EFB719F5CC",
+  "ModifiedSHA256": "FC88C3E1D6C69B05FA14EA7D26764A5531F1427E2A15E83E6B5F5E2F7446B610",
+  "ChangeScope": "新版3D场景网格/投影与平移；保留旧版目标三角定位、圆点、连线、坐标标签和匹配诊断"
+}

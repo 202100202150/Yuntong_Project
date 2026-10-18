@@ -1,0 +1,20 @@
+diff --git "a/E:\\Yuntong_Project-master\\Yuntong_Project-master\\outputs\\campus-buildings-20261008-195428\\spatial-scene.before.tsx" "b/E:\\Yuntong_Project-master\\Yuntong_Project-master\\desktop-app\\components\\spatial-scene.tsx"
+index a51b41c..0ccdb5b 100644
+--- "a/E:\\Yuntong_Project-master\\Yuntong_Project-master\\outputs\\campus-buildings-20261008-195428\\spatial-scene.before.tsx"
++++ "b/E:\\Yuntong_Project-master\\Yuntong_Project-master\\desktop-app\\components\\spatial-scene.tsx"
+@@ -1,6 +1,7 @@
+ import { useEffect, useMemo, useRef, useState } from 'react';
+ import type { CameraDetectedObject, CameraId, CameraMatchingDiagnostics, CameraMatchingReason } from '@/lib/camera-types';
+ import { groupSpatialTracks } from '@/lib/spatial-tracks';
++import { drawCampusBuildings } from '@/lib/campus-buildings';
+ import './spatial-scene.css';
+ 
+ type Point3 = { x: number; y: number; z: number };
+@@ -181,6 +182,7 @@ export default function SpatialScene({ objects, detecting, matchingDiagnostics }
+       }
+       const room = [{ x: -extent, y: 0, z: -extent }, { x: extent, y: 0, z: -extent }, { x: extent, y: 0, z: extent }, { x: -extent, y: 0, z: extent }];
+       for (let i = 0; i < room.length; i += 1) line(context, p(room[i]), p(room[(i + 1) % room.length]), '#829bb2', 1.5);
++      drawCampusBuildings(context, p);
+       // Fixed world axes. They remain tied to the scene origin while the camera view rotates.
+       context.fillStyle = '#40566d'; context.font = '800 11px Inter, sans-serif';
+       context.fillText('O', origin.x + 7, origin.y + 14);

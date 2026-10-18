@@ -1,0 +1,67 @@
+{
+  "passed": 15,
+  "failed": 0,
+  "method": "Actual TSX transpiled with existing TypeScript and executed in VM with React hook and Canvas mocks; source component and imported spatial track grouping evaluated without installing dependencies or touching cameras.",
+  "reports": [
+    {
+      "label": "Initial empty Canvas drawing exactly matches version2 scene, grid, axes, and camera markers",
+      "passed": true
+    },
+    {
+      "label": "Projection exactly matches version2 for positive/negative coordinates and angle limits with pan",
+      "passed": true
+    },
+    {
+      "label": "Both mouse buttons pan only panX/panY",
+      "passed": true
+    },
+    {
+      "label": "Release either mouse button stops pan without rotating",
+      "passed": true
+    },
+    {
+      "label": "Left mouse drag rotates yaw/pitch while retaining pan and zoom",
+      "passed": true
+    },
+    {
+      "label": "Adding right button while rotating switches to pan with no position or angle jump",
+      "passed": true
+    },
+    {
+      "label": "Pointer release and cancel stop movement",
+      "passed": true
+    },
+    {
+      "label": "Mouse wheel scales within existing bounds and retains rotation/pan",
+      "passed": true
+    },
+    {
+      "label": "Reset restores initial rotation and zoom and clears pan",
+      "passed": true
+    },
+    {
+      "label": "Rotation pitch clamps at version2 +/-90 degree limits",
+      "passed": true
+    },
+    {
+      "label": "Right context menu is prevented for pan gesture",
+      "passed": true
+    },
+    {
+      "label": "Original triangulate numeric behavior retained for missing, paired, and one-camera detections",
+      "passed": true
+    },
+    {
+      "label": "Original triangulation, track mapping, detection drawing and matching diagnostic code retained verbatim",
+      "passed": true
+    },
+    {
+      "label": "Actual detection Canvas drawing retains original radius, color, glow, and coordinate labels",
+      "passed": true
+    },
+    {
+      "label": "Actual matching diagnostics readout, tooltip, summary and failure history remain identical",
+      "passed": true
+    }
+  ]
+}

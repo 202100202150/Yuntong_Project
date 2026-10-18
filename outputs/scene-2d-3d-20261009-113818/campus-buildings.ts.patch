@@ -1,0 +1,93 @@
+diff --git "a/E:\\Yuntong_Project-master\\Yuntong_Project-master\\outputs\\scene-2d-3d-20261009-113818\\desktop-app\\lib\\campus-buildings.ts" "b/E:\\Yuntong_Project-master\\Yuntong_Project-master\\desktop-app\\lib\\campus-buildings.ts"
+index ee18560..77291b5 100644
+--- "a/E:\\Yuntong_Project-master\\Yuntong_Project-master\\outputs\\scene-2d-3d-20261009-113818\\desktop-app\\lib\\campus-buildings.ts"
++++ "b/E:\\Yuntong_Project-master\\Yuntong_Project-master\\desktop-app\\lib\\campus-buildings.ts"
+@@ -130,3 +130,88 @@ export function drawCampusBuildings(context: CanvasRenderingContext2D, project:
+   }
+   context.restore();
+ }
++
++type PlanCell = { x0: number; x1: number; z0: number; z1: number; top: number };
++type PlanEdge = { horizontal: boolean; coordinate: number; start: number; end: number };
++const PLAN_TOLERANCE = 1e-8;
++
++function planCoordinates(values: number[]): number[] {
++  return values.sort((a, b) => a - b).filter((value, index, sorted) => index === 0 || value - sorted[index - 1] > PLAN_TOLERANCE);
++}
++
++function createCampusPlan(building: CampusBuilding): { cells: PlanCell[]; edges: PlanEdge[] } {
++  const footprints = building.blocks.map((volume) => ({
++    x0: building.x + volume.x - volume.width / 2,
++    x1: building.x + volume.x + volume.width / 2,
++    z0: building.z + volume.z - volume.depth / 2,
++    z1: building.z + volume.z + volume.depth / 2,
++    top: volume.top,
++  }));
++  const xs = planCoordinates(footprints.flatMap((footprint) => [footprint.x0, footprint.x1]));
++  const zs = planCoordinates(footprints.flatMap((footprint) => [footprint.z0, footprint.z1]));
++  const heights = zs.slice(0, -1).map((z0, row) => xs.slice(0, -1).map((x0, column) => {
++    const x = (x0 + xs[column + 1]) / 2;
++    const z = (z0 + zs[row + 1]) / 2;
++    const covering = footprints.filter((footprint) => x > footprint.x0 - PLAN_TOLERANCE && x < footprint.x1 + PLAN_TOLERANCE && z > footprint.z0 - PLAN_TOLERANCE && z < footprint.z1 + PLAN_TOLERANCE);
++    return covering.length ? Math.max(...covering.map((footprint) => footprint.top)) : undefined;
++  }));
++  const cells: PlanCell[] = [];
++  const edges: PlanEdge[] = [];
++  for (let row = 0; row < heights.length; row += 1) for (let column = 0; column < heights[row].length; column += 1) {
++    const top = heights[row][column];
++    if (top === undefined) continue;
++    const x0 = xs[column];
++    const x1 = xs[column + 1];
++    const z0 = zs[row];
++    const z1 = zs[row + 1];
++    cells.push({ x0, x1, z0, z1, top });
++    const left = heights[row][column - 1];
++    const above = heights[row - 1]?.[column];
++    // Equal-height neighbours form one roof. A height change retains the
++    // tower/podium outline; uncovered neighbours retain courtyard outlines.
++    if (left === undefined || Math.abs(top - left) > PLAN_TOLERANCE) edges.push({ horizontal: false, coordinate: x0, start: z0, end: z1 });
++    if (above === undefined || Math.abs(top - above) > PLAN_TOLERANCE) edges.push({ horizontal: true, coordinate: z0, start: x0, end: x1 });
++    if (heights[row][column + 1] === undefined) edges.push({ horizontal: false, coordinate: x1, start: z0, end: z1 });
++    if (heights[row + 1]?.[column] === undefined) edges.push({ horizontal: true, coordinate: z1, start: x0, end: x1 });
++  }
++  edges.sort((a, b) => Number(a.horizontal) - Number(b.horizontal) || a.coordinate - b.coordinate || a.start - b.start);
++  const merged: PlanEdge[] = [];
++  for (const edge of edges) {
++    const previous = merged[merged.length - 1];
++    if (previous && previous.horizontal === edge.horizontal && Math.abs(previous.coordinate - edge.coordinate) <= PLAN_TOLERANCE && edge.start <= previous.end + PLAN_TOLERANCE) previous.end = Math.max(previous.end, edge.end);
++    else merged.push({ ...edge });
++  }
++  return { cells, edges: merged };
++}
++
++const campusPlans = campusBuildings.map(createCampusPlan);
++
++// The plan projection uses X/Z only, looking from +Y towards -Y. Paint all
++// roof cells in one fill so adjoining blocks cannot produce hairline gaps.
++export function drawCampusBuildingsPlan(context: CanvasRenderingContext2D, project: ProjectPoint): void {
++  context.save();
++  context.fillStyle = '#ffe1bc';
++  context.strokeStyle = '#bf9367';
++  context.lineWidth = 0.8;
++  for (const plan of campusPlans) {
++    context.beginPath();
++    for (const cell of plan.cells) {
++      const points = [
++        { x: cell.x0, y: cell.top, z: cell.z0 }, { x: cell.x1, y: cell.top, z: cell.z0 },
++        { x: cell.x1, y: cell.top, z: cell.z1 }, { x: cell.x0, y: cell.top, z: cell.z1 },
++      ].map(project);
++      points.forEach((point, index) => { if (index === 0) context.moveTo(point.x, point.y); else context.lineTo(point.x, point.y); });
++      context.closePath();
++    }
++    context.fill();
++    context.beginPath();
++    for (const edge of plan.edges) {
++      const start = project({ x: edge.horizontal ? edge.start : edge.coordinate, y: 0, z: edge.horizontal ? edge.coordinate : edge.start });
++      const end = project({ x: edge.horizontal ? edge.end : edge.coordinate, y: 0, z: edge.horizontal ? edge.coordinate : edge.end });
++      context.moveTo(start.x, start.y);
++      context.lineTo(end.x, end.y);
++    }
++    context.stroke();
++  }
++  context.restore();
++}

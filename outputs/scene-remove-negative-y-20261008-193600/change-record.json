@@ -1,0 +1,7 @@
+{
+  "BackupRoot": "E:\\Yuntong_Project-master\\Yuntong_Project-master\\outputs\\scene-remove-negative-y-20261008-193600",
+  "OriginalSHA256": "FC88C3E1D6C69B05FA14EA7D26764A5531F1427E2A15E83E6B5F5E2F7446B610",
+  "CreatedAt": "2026-10-08T19:36:00.7073495+08:00",
+  "Change": "仅移除Y负方向网格与Y负坐标刻度",
+  "ModifiedSHA256": "7C9DB0D6113EAA2C4DCB6FE983254360DF5EC41012BD584E009D25112CB3494B"
+}

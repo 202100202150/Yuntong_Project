@@ -1,0 +1,9 @@
+UAVGuard
+Copyright 2026 UAVGuard contributors
+
+The sparse ray-intersection design was inspired by the Apache-2.0 licensed
+ConsistentlyInconsistentYT/Pixeltovoxelprojector project. No source files from
+that project are copied into this repository.
+
+YOLOX is an optional Apache-2.0 licensed runtime integration. Model weights and
+training datasets are not distributed with this repository.

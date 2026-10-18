@@ -1,0 +1,30 @@
+{
+  "BackupRoot": "E:\\Yuntong_Project-master\\Yuntong_Project-master\\outputs\\scene-2d-3d-20261009-113818",
+  "WorkRoot": "E:\\Yuntong_Project-master\\Yuntong_Project-master\\work\\scene-2d-3d-20261009-113818",
+  "OriginalSHA256": {
+    "desktop-app\\components\\spatial-scene.tsx": "D14A30D88E37AE0A7395160534E1ADD859F9E07F235E49704CA148CC3C6EF5A9",
+    "desktop-app\\lib\\campus-buildings.ts": "41D5D28584D8E5C7210CE089AC1B3380603ED1F9535D4703C40B6A0C2653995A",
+    "desktop-app\\components\\spatial-scene.css": "C9F8DDAE19C5CBCCC16C2A20611F4761FC5C14D9CEF0905D67ECD8B824C1DAA5"
+  },
+  "ProjectRoot": "E:\\Yuntong_Project-master\\Yuntong_Project-master",
+  "CreatedAt": "2026-10-09T11:38:18.9935755+08:00",
+  "ModifiedFiles": [
+    "desktop-app\\components\\spatial-scene.tsx",
+    "desktop-app\\components\\spatial-scene.css",
+    "desktop-app\\lib\\campus-buildings.ts"
+  ],
+  "CurrentSHA256": {
+    "desktop-app\\lib\\campus-buildings.ts": "8EC7D8E8068B624D770D000746E71E256B3773C755FF416CB851E4C0D8403456",
+    "desktop-app\\components\\spatial-scene.tsx": "6560B39EF833370FCFB643191CB70D91B4706C51F89831A3B7A41755A6A88467",
+    "desktop-app\\components\\spatial-scene.css": "4DE0CE93825EDC8E0CFC4230A516B7A358BDD8BC095D1FEA964208991FFC1DFC"
+  },
+  "Validation": {
+    "ExistingTests": 26,
+    "PlanBoundaryChecks": 272,
+    "Typecheck": "passed",
+    "Lint": "passed",
+    "Build": "passed",
+    "SceneModeChecks": 13,
+    "Browser": "645x720, both directions, reset views and targets preserved with synthetic detection data"
+  }
+}
