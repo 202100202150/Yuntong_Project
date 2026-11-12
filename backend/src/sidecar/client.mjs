@@ -31,9 +31,9 @@ export function resolveCameraProject() {
     ? path.resolve(softwareRootPath, process.env.YUNTONG_CAMERA_PYTHON)
     : path.join(softwareRootPath, 'work', 'gpu-runtime', '.venv', 'Scripts', 'python.exe');
   const scriptPath = path.join(projectPath, 'camera_bridge.py');
-  const modelPath = process.env.YUNTONG_PERSON_MODEL
-    ? path.resolve(softwareRootPath, process.env.YUNTONG_PERSON_MODEL)
-    : path.join(softwareRootPath, 'models', 'person-v1.onnx');
+  const modelPath = process.env.YUNTONG_DRONE_MODEL
+    ? path.resolve(softwareRootPath, process.env.YUNTONG_DRONE_MODEL)
+    : path.join(softwareRootPath, 'models', 'drone.onnx');
   const engineCachePath = process.env.YUNTONG_TENSORRT_CACHE
     ? path.resolve(softwareRootPath, process.env.YUNTONG_TENSORRT_CACHE)
     : path.join(softwareRootPath, 'work', 'tensorrt');
@@ -41,7 +41,7 @@ export function resolveCameraProject() {
   for (const [label, p] of [
     ['Python 环境', pythonPath],
     ['摄像机桥接', scriptPath],
-    ['person ONNX', modelPath],
+    ['无人机 ONNX', modelPath],
   ]) {
     if (!fs.existsSync(p)) throw new Error(`${label}不存在：${p}`);
   }
@@ -75,7 +75,7 @@ export function startCameraBridge() {
           env: {
             ...process.env,
             CAMERA_BRIDGE_TOKEN: token,
-            CAMERA_PERSON_MODEL: paths.modelPath,
+            CAMERA_DRONE_MODEL: paths.modelPath,
             CAMERA_TENSORRT_CACHE: paths.engineCachePath,
             PYTHONUNBUFFERED: '1',
           },
@@ -213,7 +213,9 @@ export function requestCameraBridge(pathname, options = {}) {
             const detail = typeof parsed.error === 'string' ? parsed.error : parsed.error?.message;
             if (typeof detail === 'string' && detail.length <= 240) message = detail;
           } catch {}
-          reject(new Error(message));
+          const error = new Error(message);
+          error.statusCode = response.statusCode;
+          reject(error);
           return;
         }
         if (responseType === 'buffer') {

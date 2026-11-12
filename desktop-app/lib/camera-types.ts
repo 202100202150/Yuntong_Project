@@ -36,7 +36,9 @@ export type CameraDetectedObject = {
   id: string;
   /** Anonymous cross-camera association; absent IDs remain camera-scoped. */
   globalId?: string;
-  class: 'person';
+  /** Session name assigned by the camera bridge. */
+  displayId?: string;
+  class: 'drone';
   confidence: number;
   bbox: BoundingBox;
   frameSequence: number;
@@ -45,7 +47,7 @@ export type CameraDetectedObject = {
 export type CameraMatchingReason =
   | 'waiting_for_frames'
   | 'capture_time_gap'
-  | 'no_people'
+  | 'no_targets'
   | 'low_similarity'
   | 'ambiguous'
   | 'confirming'
@@ -90,7 +92,21 @@ export type CameraBridgeStatus = {
   previewProcessor: string;
   engineState: string;
   matchingDiagnostics: CameraMatchingDiagnostics;
+  spatial?: SpatialStatus;
   cameras: Record<CameraId, CameraRuntimeStatus>;
+};
+
+export type SpatialPoint = { x: number; y: number; z: number };
+export type SpatialTarget = SpatialPoint & {
+  id: string;
+  label: string;
+  trackingState: 'measured' | 'held';
+};
+export type SpatialStatus = {
+  state: 'uncalibrated' | 'ready' | 'waiting_for_frames' | 'frame_time_gap' | 'no_targets' | 'no_valid_matches' | 'error';
+  message: string;
+  cameras: Partial<Record<CameraId, SpatialPoint>>;
+  targets: SpatialTarget[];
 };
 
 export type CameraFrame = {
@@ -102,8 +118,14 @@ export type CameraFrame = {
   jpegBytes: Uint8Array;
 };
 
+export type CameraPreviewPair = {
+  epoch: string;
+  camera1: Pick<CameraFrame, 'sequence' | 'jpegBytes'>;
+  camera2: Pick<CameraFrame, 'sequence' | 'jpegBytes'>;
+};
+
 export type CameraSnapshotObject = {
-  class: 'person';
+  class: 'drone';
   confidence: number;
   bbox: BoundingBox;
 };
@@ -126,6 +148,7 @@ export type RecordingToggleResult = {
 export type YuntongCameraBridge = {
   getStatus(): Promise<CameraBridgeStatus>;
   getFrame(cameraId: CameraId, afterSequence: number): Promise<CameraFrame | null>;
+  getPreviewPair(afterSequences: Record<CameraId, number>, epoch: string): Promise<CameraPreviewPair | null>;
   startDetection(): Promise<CameraBridgeStatus>;
   stopDetection(): Promise<CameraBridgeStatus>;
   toggleRecording(): Promise<RecordingToggleResult>;

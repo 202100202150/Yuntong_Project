@@ -18,5 +18,11 @@
 .spatial-scene-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .spatial-scene-legend i { width: 8px; height: 8px; display: inline-block; border-radius: 50%; }
 .spatial-scene-legend .axis-x { background: #d24f55; } .spatial-scene-legend .axis-y { background: #3b9a69; } .spatial-scene-legend .axis-z { background: #3979b8; } .spatial-scene-legend .target { background: #1d9b72; }
-.spatial-scene-readout { right: 20px; bottom: 82px; max-width: calc(100% - 40px); color: #526a81; font-size: 10px; text-align: right; }
+.spatial-scene-readout { left: 16px; bottom: 40px; right: 16px; color: #526a81; font-size: 10px; display: flex; flex-wrap: wrap; gap: 5px 18px; pointer-events: none; }
 .spatial-matching-detail { display: block; margin-top: 2px; line-height: 1.35; overflow-wrap: anywhere; }
+.spatial-localization-status { position: absolute; z-index: 2; top: 12px; left: 16px; right: 108px; display: grid; gap: 3px; padding: 9px 12px; border: 1px solid #bdd8cc; border-radius: 8px; background: rgba(245,255,250,.94); color: #276a50; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; pointer-events: none; }
+.spatial-localization-status strong { font-size: 12px; }
+.spatial-localization-status.needs-calibration { background: rgba(255,250,231,.96); border-color: #e3c779; color: #80601a; }
+.spatial-localization-status.has-error { background: rgba(255,242,242,.96); border-color: #e4aaaa; color: #9b3838; }
+.spatial-campus-toggle { position: absolute; z-index: 2; bottom: 12px; left: 16px; display: flex; gap: 5px; align-items: center; color: #65768a; font-size: 10px; }
+.spatial-campus-toggle input { margin: 0; }

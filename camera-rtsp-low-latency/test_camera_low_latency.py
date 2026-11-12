@@ -101,6 +101,28 @@ class BufferTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             buffer.wait_for_new_snapshot(-1, 0.0)
 
+    def test_preview_history_is_bounded_and_reads_do_not_consume_frames(self) -> None:
+        buffer = LatestFrameBuffer(history_size=3)
+        for sequence in range(1, 6):
+            buffer.publish(np.full((2, 2, 3), sequence, np.uint8), float(sequence), None, None)
+        self.assertEqual([packet.sequence for packet in buffer.recent_snapshots()], [3, 4, 5])
+        self.assertEqual([packet.sequence for packet in buffer.recent_snapshots(4)], [5])
+        self.assertIs(buffer.latest(), buffer.recent_snapshots()[-1])
+        buffer.publish(np.zeros((2, 2, 3), np.uint8), 6.0, None, None)
+        self.assertEqual(buffer.overwritten, 5)
+
+    def test_disconnected_history_is_cleared_without_reusing_sequences(self) -> None:
+        buffer = LatestFrameBuffer(history_size=4)
+        image = np.zeros((2, 2, 3), dtype=np.uint8)
+        buffer.publish(image, 1.0, 10.0, 0.0)
+        buffer.publish(image, 2.0, 11.0, 0.0)
+        buffer.clear()
+        self.assertEqual(buffer.recent_snapshots(), ())
+        self.assertIsNone(buffer.latest())
+        self.assertIsNone(buffer.wait_for_new_snapshot(2, 0.0))
+        buffer.publish(image, 3.0, 0.0, 0.0)
+        self.assertEqual([packet.sequence for packet in buffer.recent_snapshots(2)], [3])
+
     def test_pts_tracker_reports_accumulated_drift(self) -> None:
         tracker = PtsBacklogTracker()
         self.assertEqual(tracker.observe(10.0, 100.0), 0.0)

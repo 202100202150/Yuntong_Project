@@ -8,7 +8,9 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 import urllib.error
 import urllib.request
 
@@ -18,29 +20,18 @@ import numpy as np
 
 from camera_bridge import (
     CameraBridgeService,
-    CrossCameraAssociator,
     DetectionCoordinator,
     DetectionResult,
+    DroneImageTracker,
+    DroneObject,
     EncodedPreview,
-    IouPersonTracker,
-    MatchObservation,
+    PreviewEncoder,
     OverlayVideoRecorder,
-    PersonAppearance,
-    PersonObject,
-    _appearance_similarity,
-    _evaluate_observations,
-    _matching_observation,
-    _upper_body_geometry_similarity,
-    bbox_iou,
-    decode_yolo_person_output,
-    draw_person_objects,
-    estimate_background_homography,
-    letterbox_image,
-    match_cross_camera_tracks,
+    draw_drone_objects,
     make_handler,
-    non_max_suppression,
     validate_png,
 )
+from drone_tracking import DronePositionTracker
 from camera_low_latency import (
     CameraSource,
     LatestFrameBuffer,
@@ -61,484 +52,38 @@ def png_bytes(width: int = 16, height: int = 12) -> bytes:
 
 
 class AlgorithmTests(unittest.TestCase):
-    def test_letterbox_preserves_aspect_ratio(self) -> None:
-        source = np.zeros((360, 640, 3), dtype=np.uint8)
-        image, scale, pad_x, pad_y = letterbox_image(source)
-        self.assertEqual(image.shape, (640, 640, 3))
-        self.assertAlmostEqual(scale, 1.0)
-        self.assertEqual(pad_x, 0.0)
-        self.assertEqual(pad_y, 140.0)
+    def test_small_fast_drone_keeps_id_without_box_overlap(self) -> None:
+        tracker = DroneImageTracker()
+        first, = tracker.update([((20.0, 24.0, 28.0, 30.0), 0.9)], 1920)
+        second, = tracker.update([((42.0, 26.0, 50.0, 32.0), 0.88)], 1920)
+        self.assertEqual(first.object_id, second.object_id)
 
-    def test_yolo_decode_confidence_and_nms(self) -> None:
-        output = np.zeros((1, 5, 8400), dtype=np.float32)
-        output[0, :, 0] = [200, 200, 100, 100, 0.90]
-        output[0, :, 1] = [205, 205, 100, 100, 0.80]
-        output[0, :, 2] = [500, 400, 60, 80, 0.70]
-        output[0, :, 3] = [100, 100, 40, 40, 0.10]
-        decoded = decode_yolo_person_output(
-            output,
-            frame_width=640,
-            frame_height=640,
-            scale=1.0,
-            pad_x=0.0,
-            pad_y=0.0,
-        )
-        self.assertEqual(len(decoded), 2)
-        self.assertAlmostEqual(decoded[0][1], 0.90, places=5)
-        self.assertEqual(decoded[0][0], (150.0, 150.0, 250.0, 250.0))
+    def test_3d_track_moves_in_all_axes_and_ignores_single_bad_measurement(self) -> None:
+        tracker = DronePositionTracker()
 
-    def test_iou_tracker_keeps_stable_ids(self) -> None:
-        tracker = IouPersonTracker(iou_threshold=0.2)
-        first = tracker.update([((10, 10, 50, 70), 0.8), ((200, 10, 250, 80), 0.7)])
-        second = tracker.update([((13, 11, 53, 71), 0.9), ((198, 12, 248, 82), 0.8)])
-        self.assertEqual([item.object_id for item in first], ["person-1", "person-2"])
-        self.assertEqual([item.object_id for item in second], ["person-1", "person-2"])
-        self.assertGreater(bbox_iou(first[0].bbox, second[0].bbox), 0.7)
-        self.assertEqual(non_max_suppression([first[0].bbox, second[0].bbox], [0.8, 0.9], 0.5), [1])
+        def observation(x, y, z, left="track-1", right="track-1"):
+            return {"camera1Id": left, "camera2Id": right, "x": x, "y": y, "z": z, "class": "drone"}
 
-    def test_cross_camera_match_uses_appearance_not_local_tracker_ids(self) -> None:
-        def frame_with_person(width: int, colors: tuple[tuple[int, int, int], tuple[int, int, int]]) -> np.ndarray:
-            frame = np.zeros((120, width, 3), dtype=np.uint8)
-            x1, x2 = 10, width - 10
-            frame[5:70, x1:x2] = colors[0]
-            frame[55:115, x1:x2] = colors[1]
-            return frame
+        self.assertEqual(tracker.update([observation(0, 0, 20)], 1, 1), [])
+        first, = tracker.update([observation(0.5, 0.6, 20.8)], 1.1, 1.11)
+        second, = tracker.update([observation(1.0, 1.2, 21.6, left="track-2")], 1.2, 1.21)
+        self.assertEqual(first["id"], second["id"])
+        for axis in "xyz":
+            self.assertGreater(second[axis], first[axis])
+        self.assertGreater(second["azimuthDeg"], first["azimuthDeg"])
+        self.assertGreater(second["elevationDeg"], first["elevationDeg"])
+        outlier, = tracker.update([observation(1.1, 1.2, 85, left="track-2")], 1.3, 1.31)
+        self.assertEqual([outlier[a] for a in "xyz"], [second[a] for a in "xyz"])
+        held, = tracker.update([], float("-inf"), 1.41)
+        self.assertEqual(held["trackingState"], "held")
+        self.assertEqual(tracker.update([], float("-inf"), 1.70), [])
 
-        person_box = (10.0, 5.0, 70.0, 115.0)
-        camera1 = DetectionResult(
-            1,
-            1.0,
-            10.0,
-            frame_with_person(80, ((20, 40, 220), (30, 180, 30))),
-            (PersonObject("person-1", 0.9, person_box),),
-        )
-        camera2 = DetectionResult(
-            1,
-            1.0,
-            10.1,
-            frame_with_person(80, ((20, 40, 220), (30, 180, 30))),
-            (PersonObject("person-1", 0.88, person_box),),
-        )
-        self.assertEqual(match_cross_camera_tracks(camera1, camera2), {"person-1": "person-1"})
-
-        # Identical local IDs alone must never fuse visually different people.
-        different_person = DetectionResult(
-            1,
-            1.0,
-            10.1,
-            frame_with_person(80, ((220, 30, 30), (30, 30, 220))),
-            (PersonObject("person-1", 0.88, person_box),),
-        )
-        self.assertEqual(match_cross_camera_tracks(camera1, different_person), {})
-
-    def test_cross_camera_match_rejects_ambiguous_or_stale_candidates(self) -> None:
-        frame = np.zeros((120, 200, 3), dtype=np.uint8)
-        frame[5:115, 5:95] = (20, 40, 220)
-        frame[5:115, 105:195] = (20, 40, 220)
-        camera1 = DetectionResult(
-            1,
-            1.0,
-            10.0,
-            frame[:, :100],
-            (PersonObject("person-1", 0.9, (5.0, 5.0, 95.0, 115.0)),),
-        )
-        camera2 = DetectionResult(
-            1,
-            1.0,
-            10.1,
-            frame,
-            (
-                PersonObject("person-1", 0.9, (5.0, 5.0, 95.0, 115.0)),
-                PersonObject("person-2", 0.9, (105.0, 5.0, 195.0, 115.0)),
-            ),
-        )
-        self.assertEqual(match_cross_camera_tracks(camera1, camera2), {})
-
-        stale_camera2 = replace(camera2, received_monotonic=1.5)
-        self.assertEqual(match_cross_camera_tracks(camera1, stale_camera2), {})
-
-    def test_cross_camera_match_uses_frame_arrival_not_inference_completion(self) -> None:
-        frame = np.full((120, 80, 3), (20, 40, 220), dtype=np.uint8)
-        person = (PersonObject("person-1", 0.9, (10.0, 5.0, 70.0, 115.0)),)
-        camera1 = DetectionResult(1, 10.0, 10.1, frame, person)
-        camera2 = DetectionResult(1, 10.39, 11.0, frame, person)
-
-        self.assertEqual(match_cross_camera_tracks(camera1, camera2), {"person-1": "person-1"})
-        self.assertEqual(
-            match_cross_camera_tracks(camera1, replace(camera2, received_monotonic=10.41)),
-            {},
-        )
-
-    def test_texture_separates_people_with_the_same_clothing_hue(self) -> None:
-        boxes = ((10.0, 5.0, 80.0, 115.0), (110.0, 5.0, 180.0, 115.0))
-        plain = np.full((110, 70, 3), (20, 40, 220), dtype=np.uint8)
-        striped = plain.copy()
-        striped[::8, :] = (10, 20, 110)  # Same hue/saturation; different texture.
-
-        def scene(first: np.ndarray, second: np.ndarray) -> np.ndarray:
-            image = np.zeros((120, 200, 3), dtype=np.uint8)
-            image[5:115, 10:80] = first
-            image[5:115, 110:180] = second
-            return image
-
-        people = (
-            PersonObject("person-1", 0.9, boxes[0]),
-            PersonObject("person-2", 0.9, boxes[1]),
-        )
-        left = DetectionResult(1, 10.0, 10.01, scene(plain, striped), people)
-        right = DetectionResult(1, 10.02, 10.03, scene(striped, plain), people)
-        self.assertEqual(
-            match_cross_camera_tracks(left, right),
-            {"person-1": "person-2", "person-2": "person-1"},
-        )
-
-    def test_background_homography_recovers_fixed_scene_behind_people(self) -> None:
-        width, height = 640, 480
-        random = np.random.default_rng(1027)
-        background = random.integers(0, 256, (height, width, 3), dtype=np.uint8)
-        background = cv2.GaussianBlur(background, (3, 3), 0)
-        pixel_homography = np.array(
-            [[1.015, 0.025, 18.0], [-0.015, 1.0, 14.0], [0.00004, -0.00002, 1.0]],
-            dtype=np.float64,
-        )
-        first_frame = background.copy()
-        second_frame = cv2.warpPerspective(background, pixel_homography, (width, height))
-        first_box = (190.0, 110.0, 290.0, 435.0)
-        first_corners = np.float32([
-            [[first_box[0], first_box[1]]], [[first_box[2], first_box[1]]],
-            [[first_box[2], first_box[3]]], [[first_box[0], first_box[3]]],
-        ])
-        mapped = cv2.perspectiveTransform(first_corners, pixel_homography).reshape(-1, 2)
-        second_box = (
-            float(mapped[:, 0].min()), float(mapped[:, 1].min()),
-            float(mapped[:, 0].max()), float(mapped[:, 1].max()),
-        )
-        cv2.rectangle(first_frame, (190, 110), (290, 435), (20, 50, 220), -1)
-        cv2.rectangle(
-            second_frame,
-            (int(second_box[0]), int(second_box[1])),
-            (int(second_box[2]), int(second_box[3])),
-            (190, 40, 30),
-            -1,
-        )
-        first = DetectionResult(
-            1, 10.0, 10.01, first_frame,
-            (PersonObject("person-1", 0.9, first_box),),
-        )
-        second = DetectionResult(
-            1, 10.02, 10.03, second_frame,
-            (PersonObject("person-7", 0.9, second_box),),
-        )
-
-        estimate = estimate_background_homography(first, second)
-        self.assertIsNotNone(estimate)
-        assert estimate is not None
-        normalized_homography, inliers = estimate
-        self.assertGreaterEqual(inliers, 30)
-        for x, y in ((0.12, 0.18), (0.72, 0.30), (0.82, 0.83)):
-            source = np.float32([[[x, y]]])
-            projected = cv2.perspectiveTransform(source, normalized_homography)[0, 0]
-            expected_pixels = cv2.perspectiveTransform(
-                np.float32([[[x * width, y * height]]]), pixel_homography
-            )[0, 0]
-            expected = expected_pixels / np.float32([width, height])
-            np.testing.assert_allclose(projected, expected, atol=0.012, rtol=0)
-
-    def test_background_homography_rejects_unrelated_or_untextured_views(self) -> None:
-        def result(sequence: int, frame: np.ndarray) -> DetectionResult:
-            return DetectionResult(sequence, 10.0, 10.01, frame, ())
-
-        random = np.random.default_rng(2205)
-        unrelated = random.integers(0, 256, (480, 640, 3), dtype=np.uint8)
-        other = random.integers(0, 256, (480, 640, 3), dtype=np.uint8)
-        self.assertIsNone(estimate_background_homography(result(1, unrelated), result(1, other)))
-        plain = np.full((480, 640, 3), 127, dtype=np.uint8)
-        self.assertIsNone(estimate_background_homography(result(1, plain), result(1, plain)))
-
-    def test_upper_body_geometry_tolerates_hidden_lower_body(self) -> None:
-        frame = np.zeros((480, 640, 3), dtype=np.uint8)
-        first = PersonObject("person-1", 0.9, (190.0, 90.0, 290.0, 430.0))
-        same_person_clipped = PersonObject("person-8", 0.9, (190.0, 90.0, 290.0, 250.0))
-        distant_person = PersonObject("person-9", 0.9, (390.0, 90.0, 490.0, 250.0))
-        left = _matching_observation(DetectionResult(1, 10.0, 10.01, frame, (first,)))
-        right = _matching_observation(
-            DetectionResult(1, 10.01, 10.02, frame, (same_person_clipped, distant_person))
-        )
-        matrix = np.eye(3, dtype=np.float64)
-        near_score = _upper_body_geometry_similarity(left, first, right, same_person_clipped, matrix)
-        far_score = _upper_body_geometry_similarity(left, first, right, distant_person, matrix)
-        self.assertGreater(near_score, 0.85)
-        self.assertGreater(near_score - far_score, 0.4)
-
-    def test_three_frame_appearance_median_ignores_one_occluded_crop(self) -> None:
-        normal = np.full((120, 80, 3), (20, 40, 220), dtype=np.uint8)
-        occluded = np.full((120, 80, 3), (220, 40, 20), dtype=np.uint8)
-        person = (PersonObject("person-1", 0.9, (10.0, 5.0, 70.0, 115.0)),)
-        associator = CrossCameraAssociator()
-        results = [
-            DetectionResult(1, 10.00, 10.01, normal, person),
-            DetectionResult(2, 10.10, 10.11, normal, person),
-            DetectionResult(3, 10.20, 10.21, occluded, person),
-        ]
-        for result in results:
-            associator.observe("camera1", result)
-
-        smoothed = associator._smoothed_observation(
-            "camera1", _matching_observation(results[-1])
-        ).appearances[0]
-        normal_descriptor = _matching_observation(results[0]).appearances[0]
-        occluded_descriptor = _matching_observation(results[-1]).appearances[0]
-        self.assertIsNotNone(smoothed)
-        self.assertIsNotNone(normal_descriptor)
-        self.assertIsNotNone(occluded_descriptor)
-        assert smoothed is not None and normal_descriptor is not None and occluded_descriptor is not None
-        self.assertGreater(_appearance_similarity(smoothed, normal_descriptor), 0.98)
-        self.assertGreater(
-            _appearance_similarity(smoothed, normal_descriptor),
-            _appearance_similarity(smoothed, occluded_descriptor) + 0.25,
-        )
-
-    def test_geometry_breaks_appearance_tie_without_overriding_low_similarity(self) -> None:
-        shared_texture = np.zeros(2, dtype=np.float32)
-        shared_head = np.array([1.0, 0.0], dtype=np.float32)
-        left_appearance = PersonAppearance(
-            np.array([1.0, 0.0], dtype=np.float32), shared_texture, shared_head, 0.25
-        )
-        right_appearance = PersonAppearance(
-            np.array([0.8, 0.6], dtype=np.float32), shared_texture, shared_head, 0.25
-        )
-        different_appearance = PersonAppearance(
-            np.array([0.0, 1.0], dtype=np.float32), shared_texture,
-            np.array([0.0, 1.0], dtype=np.float32), 0.25,
-        )
-        left = MatchObservation(
-            1, 10.0, 10.01, 640, 480,
-            (
-                PersonObject("person-1", 0.9, (80.0, 80.0, 160.0, 400.0)),
-                PersonObject("person-2", 0.9, (480.0, 80.0, 560.0, 400.0)),
-            ),
-            (left_appearance, left_appearance),
-        )
-        right = MatchObservation(
-            1, 10.02, 10.03, 640, 480,
-            (
-                PersonObject("person-7", 0.9, (100.0, 80.0, 180.0, 400.0)),
-                PersonObject("person-8", 0.9, (500.0, 80.0, 580.0, 400.0)),
-            ),
-            (right_appearance, right_appearance),
-        )
-        kwargs = {
-            "max_capture_skew_seconds": 0.4,
-            "minimum_similarity": 0.7,
-            "minimum_margin": 0.08,
-        }
-        self.assertEqual(_evaluate_observations(left, right, **kwargs).matches, {})
-
-        # The cameras see the same background 20 pixels apart horizontally.
-        geometry = np.array([[1.0, 0.0, 20.0 / 640], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
-        self.assertEqual(
-            _evaluate_observations(left, right, geometry_matrix=geometry, **kwargs).matches,
-            {"person-1": "person-7", "person-2": "person-8"},
-        )
-        # A position bonus must not rescue a pair below the raw 0.7 appearance threshold.
-        unrelated = replace(right, appearances=(different_appearance, different_appearance))
-        self.assertLess(_appearance_similarity(left_appearance, different_appearance), 0.7)
-        self.assertEqual(
-            _evaluate_observations(left, unrelated, geometry_matrix=geometry, **kwargs).matches,
-            {},
-        )
-
-    def test_cross_camera_confirmation_requires_new_frames_from_both_cameras(self) -> None:
-        frame = np.full((120, 80, 3), (20, 40, 220), dtype=np.uint8)
-        person = (PersonObject("person-1", 0.9, (10.0, 5.0, 70.0, 115.0)),)
-        result = lambda sequence, received, completed: DetectionResult(
-            sequence, received, completed, frame, person
-        )
-        associator = CrossCameraAssociator()
-
-        associator.observe("camera1", result(1, 10.00, 10.01))
-        associator.observe("camera2", result(1, 10.02, 10.03))
-        self.assertEqual(associator.confirmed_matches(10.03), {})
-
-        associator.observe("camera1", result(2, 10.20, 10.21))
-        self.assertEqual(associator.confirmed_matches(10.21), {})
-
-        associator.observe("camera2", result(2, 10.22, 10.23))
-        self.assertEqual(associator.confirmed_matches(10.23), {"person-1": "person-1"})
-
-    def test_cross_camera_history_uses_matching_frame_not_just_nearest_frame(self) -> None:
-        red = np.full((120, 80, 3), (20, 40, 220), dtype=np.uint8)
-        blue = np.full((120, 80, 3), (220, 40, 20), dtype=np.uint8)
-        person = (PersonObject("person-1", 0.9, (10.0, 5.0, 70.0, 115.0)),)
-        def result(sequence: int, received: float, frame: np.ndarray) -> DetectionResult:
-            return DetectionResult(sequence, received, received + 0.01, frame, person)
-
-        associator = CrossCameraAssociator()
-        associator.observe("camera1", result(1, 10.00, red))
-        associator.observe("camera2", result(1, 10.02, red))
-        associator.observe("camera2", result(2, 10.20, red))
-        # A slightly newer but noisy camera-2 frame is the closest by time.
-        associator.observe("camera2", result(3, 10.21, blue))
-        associator.observe("camera1", result(2, 10.22, red))
-
-        # The camera-2 frame at 10.20 is still a valid synchronized appearance
-        # sample; the single noisy frame at 10.21 must not mask it.
-        self.assertEqual(associator.confirmed_matches(10.23), {"person-1": "person-1"})
-
-    def test_cross_camera_one_bad_frame_does_not_restart_confirmation(self) -> None:
-        red = np.full((120, 80, 3), (20, 40, 220), dtype=np.uint8)
-        blue = np.full((120, 80, 3), (220, 40, 20), dtype=np.uint8)
-        person = (PersonObject("person-1", 0.9, (10.0, 5.0, 70.0, 115.0)),)
-        def result(sequence: int, received: float, frame: np.ndarray) -> DetectionResult:
-            return DetectionResult(sequence, received, received + 0.01, frame, person)
-
-        associator = CrossCameraAssociator(confirmation_seconds=0.15)
-        associator.observe("camera1", result(1, 10.00, red))
-        associator.observe("camera2", result(1, 10.02, red))
-        associator.observe("camera1", result(2, 10.10, red))
-        associator.observe("camera2", result(2, 10.12, blue))
-        self.assertEqual(associator.confirmed_matches(10.13), {})
-
-        associator.observe("camera1", result(3, 10.20, red))
-        associator.observe("camera2", result(3, 10.22, red))
-        # The recovered pair consists of new frames on both sides and spans
-        # the original 0.15-second confirmation period.
-        self.assertEqual(associator.confirmed_matches(10.23), {"person-1": "person-1"})
-
-    def test_cross_camera_two_independent_bad_frame_pairs_reset_candidate(self) -> None:
-        red = np.full((120, 80, 3), (20, 40, 220), dtype=np.uint8)
-        blue = np.full((120, 80, 3), (220, 40, 20), dtype=np.uint8)
-        person = (PersonObject("person-1", 0.9, (10.0, 5.0, 70.0, 115.0)),)
-        def result(sequence: int, received: float, frame: np.ndarray) -> DetectionResult:
-            return DetectionResult(sequence, received, received + 0.01, frame, person)
-
-        associator = CrossCameraAssociator(confirmation_seconds=0.15)
-        associator.observe("camera1", result(1, 10.00, red))
-        associator.observe("camera2", result(1, 10.02, red))
-        for sequence, received in ((2, 10.20), (3, 10.30)):
-            associator.observe("camera1", result(sequence, received, red))
-            associator.observe("camera2", result(sequence, received + 0.02, blue))
-        self.assertEqual(associator.confirmed_matches(10.33), {})
-        self.assertEqual(associator.diagnostics(10.33)["pendingPairs"], 0)
-
-        # Red appears in both views again, but after two *distinct* failed
-        # frame pairs this must begin a new candidate rather than immediately
-        # confirming the first candidate from 10.02.
-        associator.observe("camera1", result(4, 10.36, red))
-        associator.observe("camera2", result(4, 10.38, red))
-        self.assertEqual(associator.confirmed_matches(10.39), {})
-
-    def test_cross_camera_history_still_rejects_actual_capture_skew(self) -> None:
-        frame = np.full((120, 80, 3), (20, 40, 220), dtype=np.uint8)
-        person = (PersonObject("person-1", 0.9, (10.0, 5.0, 70.0, 115.0)),)
-        associator = CrossCameraAssociator(max_capture_skew_seconds=0.4)
-        for sequence, received in ((1, 10.00), (2, 10.10)):
-            associator.observe("camera1", DetectionResult(sequence, received, received + 0.01, frame, person))
-        for sequence, received in ((1, 10.51), (2, 10.61)):
-            associator.observe("camera2", DetectionResult(sequence, received, received + 0.01, frame, person))
-
-        # Every pair differs by more than 0.4 seconds, even after searching
-        # the buffered history. Appearance alone cannot merge them.
-        self.assertEqual(associator.confirmed_matches(10.62), {})
-
-    def test_confirmed_match_survives_gap_until_detection_ttl(self) -> None:
-        frame = np.full((120, 80, 3), (20, 40, 220), dtype=np.uint8)
-        person = (PersonObject("person-1", 0.9, (10.0, 5.0, 70.0, 115.0)),)
-        associator = CrossCameraAssociator(result_ttl=0.6)
-        for sequence, frame_time in ((1, 10.0), (2, 10.2)):
-            associator.observe(
-                "camera1",
-                DetectionResult(sequence, frame_time, frame_time + 0.01, frame, person),
-            )
-            associator.observe(
-                "camera2",
-                DetectionResult(sequence, frame_time + 0.02, frame_time + 0.03, frame, person),
-            )
-
-        self.assertEqual(associator.confirmed_matches(10.23), {"person-1": "person-1"})
-        # No new result arrives for 0.49 s; the last detections are still valid.
-        self.assertEqual(associator.confirmed_matches(10.72), {"person-1": "person-1"})
-        self.assertEqual(associator.confirmed_matches(10.84), {})
-
-    def test_confirmed_match_is_withdrawn_after_fresh_conflicting_appearances(self) -> None:
-        red = np.full((120, 80, 3), (20, 40, 220), dtype=np.uint8)
-        blue = np.full((120, 80, 3), (220, 40, 20), dtype=np.uint8)
-        person = (PersonObject("person-1", 0.9, (10.0, 5.0, 70.0, 115.0)),)
-        associator = CrossCameraAssociator()
-        for sequence, frame_time in ((1, 10.0), (2, 10.2)):
-            associator.observe(
-                "camera1",
-                DetectionResult(sequence, frame_time, frame_time + 0.01, red, person),
-            )
-            associator.observe(
-                "camera2",
-                DetectionResult(sequence, frame_time + 0.02, frame_time + 0.03, red, person),
-            )
-        self.assertEqual(associator.confirmed_matches(10.23), {"person-1": "person-1"})
-
-        associator.observe("camera1", DetectionResult(3, 10.40, 10.41, red, person))
-        associator.observe("camera2", DetectionResult(3, 10.42, 10.43, blue, person))
-        self.assertEqual(associator.confirmed_matches(10.43), {"person-1": "person-1"})
-        associator.observe("camera1", DetectionResult(4, 10.58, 10.59, red, person))
-        self.assertEqual(associator.confirmed_matches(10.59), {})
-
-    def test_cross_camera_failed_confirmation_keeps_people_separate(self) -> None:
-        red = np.full((120, 80, 3), (20, 40, 220), dtype=np.uint8)
-        blue = np.full((120, 80, 3), (220, 40, 20), dtype=np.uint8)
-        person = (PersonObject("person-1", 0.9, (10.0, 5.0, 70.0, 115.0)),)
-        associator = CrossCameraAssociator()
-        associator.observe("camera1", DetectionResult(1, 10.00, 10.01, red, person))
-        associator.observe("camera2", DetectionResult(1, 10.02, 10.03, red, person))
-        self.assertEqual(associator.confirmed_matches(10.03), {})
-
-        associator.observe("camera1", DetectionResult(2, 10.20, 10.21, red, person))
-        associator.observe("camera2", DetectionResult(2, 10.22, 10.23, blue, person))
-        self.assertEqual(associator.confirmed_matches(10.23), {})
-        diagnostics = associator.diagnostics(10.23)
-        self.assertGreater(diagnostics["reasonCounts"].get("low_similarity", 0), 0)
-        self.assertEqual(diagnostics["recentFailures"][0]["reason"], "low_similarity")
-        self.assertEqual(diagnostics["recentFailures"][0]["camera1Id"], "person-1")
-        self.assertEqual(diagnostics["recentFailures"][0]["camera2Id"], "person-1")
-        self.assertEqual(associator.diagnostics(41.0)["reasonCounts"], {})
-
-    def test_cross_camera_two_people_confirm_one_to_one_when_order_swaps(self) -> None:
-        red, blue = (20, 40, 220), (220, 40, 20)
-        boxes = ((10.0, 5.0, 80.0, 115.0), (110.0, 5.0, 180.0, 115.0))
-        def frame(first, second):
-            image = np.zeros((120, 200, 3), dtype=np.uint8)
-            image[5:115, 10:80] = first
-            image[5:115, 110:180] = second
-            return image
-
-        camera1_frame = frame(red, blue)
-        camera2_frame = frame(blue, red)
-        camera1_people = (PersonObject("person-1", 0.9, boxes[0]), PersonObject("person-2", 0.9, boxes[1]))
-        camera2_people = (PersonObject("person-1", 0.9, boxes[0]), PersonObject("person-2", 0.9, boxes[1]))
-        associator = CrossCameraAssociator()
-        for sequence, frame_time in ((1, 10.0), (2, 10.2)):
-            associator.observe(
-                "camera1",
-                DetectionResult(sequence, frame_time, frame_time + 0.01, camera1_frame, camera1_people),
-            )
-            associator.observe(
-                "camera2",
-                DetectionResult(
-                    sequence, frame_time + 0.02, frame_time + 0.03,
-                    camera2_frame, camera2_people,
-                ),
-            )
-
-        self.assertEqual(
-            associator.confirmed_matches(10.23),
-            {"person-1": "person-2", "person-2": "person-1"},
-        )
-
-    def test_draw_person_objects_burns_box_and_person_label_into_frame(self) -> None:
+    def test_draw_drone_objects_burns_box_and_drone_label_into_frame(self) -> None:
         """The frame handed to a recorder/snapshot must contain the annotation pixels."""
         image = np.zeros((80, 120, 3), dtype=np.uint8)
-        detected = PersonObject("person-1", 0.875, (20.0, 24.0, 90.0, 68.0))
+        detected = DroneObject("track-1", 0.875, (20.0, 24.0, 90.0, 68.0))
 
-        draw_person_objects(image, (detected,))
+        draw_drone_objects(image, (detected,))
 
         # OpenCV stores the selected green color as BGR.  Checking a small
         # neighborhood along each edge avoids coupling this test to the exact
@@ -572,6 +117,164 @@ class _FakeDetector:
 
 
 class SchedulingTests(unittest.TestCase):
+    def _preview_service(self, width=32, height=24):
+        service = CameraBridgeService.__new__(CameraBridgeService)
+        service._stop_event = threading.Event()
+        service._preview_pair_lock = threading.Lock()
+        service._preview_epoch = "b" * 32
+        service._preview_pair = None
+        service._preview_pair_started_at = 0.0
+        frames = {key: LatestFrameBuffer(history_size=4) for key in ("camera1", "camera2")}
+        service.cameras = {key: SimpleNamespace(frames=buffer) for key, buffer in frames.items()}
+        service.previews = {key: PreviewEncoder(width, height, 90, 30) for key in frames}
+        service.detection = DetectionCoordinator(frames, _FakeDetector())
+        return service, frames
+
+    def test_paired_preview_uses_newest_matching_packets_and_drops_backlogged_frames(self) -> None:
+        service, frames = self._preview_service()
+        image = np.zeros((24, 32, 3), dtype=np.uint8)
+        # At t=10, camera2's newest receiver timestamp is close, but its
+        # content is ~1 second older after accounting for RTSP backlog.
+        frames["camera1"].publish(image, 9.90, None, None)
+        frames["camera1"].publish(image, 9.98, None, None)
+        frames["camera2"].publish(image, 9.93, None, 0.01)
+        frames["camera2"].publish(image, 9.99, None, 1.0)
+        def fetch(after1=0, after2=0, epoch=""):
+            return service.preview_pair(
+                after_camera1=after1, after_camera2=after2, wait_timeout=0, epoch=epoch,
+            )
+        with patch("camera_bridge.time.monotonic", return_value=10.0):
+            pair = fetch()
+            assert pair is not None
+            self.assertEqual((pair.camera1.sequence, pair.camera2.sequence), (2, 1))
+            self.assertAlmostEqual(pair.skew_seconds, 0.06)
+            self.assertIsNone(fetch(2, 1))
+            # A viewer whose sidecar restarted can recover even with old
+            # cursors much higher than either new sequence.
+            self.assertEqual(fetch(100, 101, "a" * 32), pair)
+        frames["camera2"].clear()
+        with patch("camera_bridge.time.monotonic", return_value=10.04):
+            self.assertIsNone(fetch())  # Cached pair cannot survive a disconnect.
+        frames["camera1"].publish(image, 10.05, None, None)
+        frames["camera2"].publish(image, 10.07, None, None)
+        with patch("camera_bridge.time.monotonic", return_value=10.08):
+            recovered = fetch(2, 1)
+            assert recovered is not None
+            self.assertEqual((recovered.camera1.sequence, recovered.camera2.sequence), (3, 3))
+            self.assertAlmostEqual(recovered.skew_seconds, 0.02)
+
+    def test_paired_preview_keeps_boxes_with_their_original_frames(self) -> None:
+        service, frames = self._preview_service(160, 100)
+        service.detection.request_start()
+        for sequence, x in enumerate((30, 110), start=1):
+            image = np.zeros((100, 160, 3), dtype=np.uint8)
+            image[57:63, x - 3:x + 3] = 255
+            for key, buffer in frames.items():
+                buffer.publish(image, 9.85 + 0.06 * sequence, None, None)
+
+        def complete(camera, index, objects):
+            packet = frames[camera].recent_snapshots()[index]
+            service.detection._result_history[camera].append(DetectionResult(
+                packet.sequence, packet.received_monotonic, 10.0, packet.image, objects,
+            ))
+
+        def fetch(after=0):
+            return service.preview_pair(
+                after_camera1=after, after_camera2=after, wait_timeout=0, epoch="",
+            )
+
+        first_box = (DroneObject("track-1", 0.9, (20, 48, 40, 72)),)
+        complete("camera1", 0, first_box)
+        complete("camera2", 0, ())  # Inference can complete without a detection.
+        with patch("camera_bridge.time.monotonic", return_value=10.0):
+            first = fetch()
+            assert first is not None
+            self.assertEqual((first.camera1.sequence, first.camera2.sequence), (1, 1))
+            image = cv2.imdecode(np.frombuffer(first.camera1.jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+            self.assertGreater(int(image[60, 30].min()), 200)
+            self.assertLess(int(image[60, 110].max()), 15)
+            blue, green, red = map(int, image[72, 30])
+            self.assertGreater(green, max(blue, red) + 50)
+            self.assertIsNone(fetch(1))
+
+        second_box = (DroneObject("track-1", 0.9, (100, 48, 120, 72)),)
+        complete("camera1", 1, second_box)
+        with patch("camera_bridge.time.monotonic", return_value=10.04):
+            self.assertIsNone(fetch(1))  # Wait while the companion is in inference.
+        complete("camera2", 1, second_box)
+        with patch("camera_bridge.time.monotonic", return_value=10.05):
+            second = fetch(1)
+            assert second is not None
+            self.assertEqual((second.camera1.sequence, second.camera2.sequence), (2, 2))
+            self.assertEqual((second.camera1.detection_sequence, second.camera2.detection_sequence), (2, 2))
+
+        service.detection.request_stop()
+        with patch("camera_bridge.time.monotonic", return_value=10.10):
+            raw = fetch()
+            assert raw is not None
+            self.assertEqual((raw.camera1.detection_sequence, raw.camera2.detection_sequence), (0, 0))
+
+    def test_single_preview_never_overlays_a_stale_detection_on_new_video(self) -> None:
+        service, frames = self._preview_service()
+        service.detection.request_start()
+        image = np.zeros((24, 32, 3), dtype=np.uint8)
+        buffer = frames["camera1"]
+        buffer.publish(image, 9.90, None, None)
+        buffer.publish(image, 9.99, None, None)
+        drone = DroneObject("track-1", 0.9, (4, 6, 12, 18))
+        service.detection._result_history["camera1"].append(DetectionResult(1, 9.90, 9.95, image, (drone,)))
+        with patch("camera_bridge.time.monotonic", return_value=10.0):
+            first = service.preview_jpeg("camera1")
+            assert first is not None
+            self.assertEqual((first.sequence, first.detection_sequence), (1, 1))
+            self.assertIsNone(service.preview_jpeg("camera1", after_sequence=1))
+
+        buffer.publish(image, 10.31, None, None)
+        with patch("camera_bridge.time.monotonic", return_value=10.32):
+            raw = service.preview_jpeg("camera1", after_sequence=1)
+            assert raw is not None
+            self.assertEqual((raw.sequence, raw.detection_sequence), (3, 0))
+
+    def test_detection_uses_a_near_time_pair_before_inference(self) -> None:
+        frames = {key: LatestFrameBuffer(history_size=4) for key in ("camera1", "camera2")}
+        coordinator = DetectionCoordinator(frames, _FakeDetector(), per_camera_fps=12.5)
+        coordinator.request_start()
+        image = np.zeros((24, 32, 3), dtype=np.uint8)
+        frames["camera1"].publish(image, 9.92, None, None)
+        frames["camera1"].publish(image, 9.98, None, None)
+        frames["camera2"].publish(image, 9.93, None, None)
+        frames["camera2"].publish(image, 9.99, None, 0.5)
+        with patch("camera_bridge.time.monotonic", return_value=10.0):
+            first = coordinator._select_work()
+        with patch("camera_bridge.time.monotonic", return_value=10.03):
+            second = coordinator._select_work()
+        assert first is not None and second is not None
+        self.assertEqual((first[0], first[1].sequence, first[3]), ("camera1", 1, (1, 1)))
+        self.assertEqual((second[0], second[1].sequence, second[3]), ("camera2", 1, (1, 1)))
+        frames["camera1"].publish(image, 10.07, None, None)
+        frames["camera2"].publish(image, 10.071, None, None)
+        with patch("camera_bridge.time.monotonic", return_value=10.079):
+            self.assertIsNone(coordinator._select_work())
+        with patch("camera_bridge.time.monotonic", return_value=10.081):
+            next_pair = coordinator._select_work()
+        assert next_pair is not None
+        self.assertEqual(next_pair[3], (3, 3))
+
+    def test_spatial_snapshot_never_combines_different_detection_pairs(self) -> None:
+        frames = {key: LatestFrameBuffer() for key in ("camera1", "camera2")}
+        coordinator = DetectionCoordinator(frames, _FakeDetector())
+        coordinator.request_start()
+        image = np.zeros((24, 32, 3), dtype=np.uint8)
+        now = time.monotonic()
+        drone = DroneObject("track-1", .9, (3, 5, 8, 11))
+        first = DetectionResult(1, now, now, image, (drone,), pair_id=(1, 2))
+        second = DetectionResult(2, now, now, image, (drone,), pair_id=(3, 2))
+        coordinator._result_history["camera1"].append(first)
+        coordinator._result_history["camera2"].append(second)
+        self.assertEqual(coordinator.spatial_snapshot(), {"camera1": None, "camera2": None})
+        coordinator._result_history["camera2"].append(replace(second, pair_id=(1, 2)))
+        self.assertEqual(coordinator.spatial_snapshot()["camera1"], first)
+
     def test_detection_result_expires_after_six_tenths_of_a_second(self) -> None:
         frames = {"camera1": LatestFrameBuffer(), "camera2": LatestFrameBuffer()}
         frames["camera1"].publish(
@@ -625,8 +328,8 @@ class SchedulingTests(unittest.TestCase):
         assert camera1 is not None and camera2 is not None
         self.assertEqual(camera1.sequence, 3)
         self.assertEqual(camera2.sequence, 1)
-        self.assertEqual(camera1.objects[0].object_id, "person-1")
-        self.assertEqual(camera2.objects[0].object_id, "person-1")
+        self.assertEqual(camera1.objects[0].object_id, "track-1")
+        self.assertEqual(camera2.objects[0].object_id, "track-1")
         coordinator.request_stop()
         self.assertIsNone(coordinator.latest("camera1"))
         coordinator.shutdown()
@@ -750,11 +453,11 @@ class OverlayRecordingTests(unittest.TestCase):
             # 320x240 is large enough for both NVENC and libx264's H.264
             # profiles; tiny synthetic frames can be rejected by hardware
             # encoders before the overlay code is exercised.
-            objects = (PersonObject("person-1", 0.9, (40.0, 56.0, 260.0, 200.0)),)
+            objects = (DroneObject("track-1", 0.9, (40.0, 56.0, 260.0, 200.0)),)
             recorder = OverlayVideoRecorder(
                 output,
                 "camera1",
-                lambda image: draw_person_objects(image, objects),
+                lambda image: draw_drone_objects(image, objects),
                 queue_size=output.record_queue_packets,
             )
             recorder.start()
@@ -877,6 +580,48 @@ class BridgeSafetyTests(unittest.TestCase):
                 preview_max_fps=10.0,
             )
 
+    def test_bridge_uses_configured_per_camera_detection_rate(self) -> None:
+        class FakeDetector:
+            def load(self) -> None:
+                pass
+
+            def detect(self, image: np.ndarray) -> list[tuple[tuple[float, float, float, float], float]]:
+                return []
+
+            def diagnostics(self) -> dict[str, object]:
+                return {}
+
+            def close(self) -> None:
+                pass
+
+        def output(key: str) -> OutputConfig:
+            return OutputConfig(
+                record_dir=Path("unused") / key,
+                snapshot_dir=Path("unused") / key,
+                snapshot_format="png",
+                jpeg_quality=90,
+                png_compression=3,
+                record_container="mp4",
+                record_queue_packets=16,
+                record_on_start=False,
+            )
+
+        with patch("camera_bridge.SpatialLocalizer"):
+            service = CameraBridgeService(
+                [self._source("camera1"), self._source("camera2")],
+                {"camera1": output("camera1"), "camera2": output("camera2")},
+                model_path=Path("unused.onnx"),
+                preview_width=768,
+                preview_height=432,
+                preview_jpeg_quality=78,
+                preview_max_fps=30.0,
+                detection_fps=7.0,
+                detector=FakeDetector(),
+            )
+
+        self.assertAlmostEqual(service.detection.minimum_interval, 1.0 / 7.0)
+        self.assertEqual(service.detection.state()["targetFpsPerCamera"], 7.0)
+
     def test_capture_request_submits_detection_matched_frames_with_overlays(self) -> None:
         class FakeDetection:
             def __init__(self, results: dict[str, DetectionResult]) -> None:
@@ -906,7 +651,7 @@ class BridgeSafetyTests(unittest.TestCase):
                 received_monotonic=now,
                 completed_monotonic=now,
                 frame=np.zeros((80, 120, 3), dtype=np.uint8),
-                objects=(PersonObject(f"person-{index}", 0.9, (10.0, 12.0, 60.0, 70.0)),),
+                objects=(DroneObject(f"track-{index}", 0.9, (10.0, 12.0, 60.0, 70.0)),),
             )
             for index, key in enumerate(("camera1", "camera2"), start=1)
         }

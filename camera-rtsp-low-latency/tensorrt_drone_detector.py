@@ -1,4 +1,4 @@
-"""TensorRT FP32/TF32 backend for the fixed-shape person detector.
+"""TensorRT FP32/TF32 backend for the fixed-shape drone detector.
 
 The module deliberately imports neither TensorRT nor CUDA at import time.  The
 production protocol is intentionally small and matches ``camera_bridge``:
@@ -31,11 +31,12 @@ from typing import Any, Callable, Mapping
 import numpy as np
 
 
-INPUT_SHAPE = (1, 3, 640, 640)
+INPUT_SHAPE = (1, 3, 1280, 1280)
+OUTPUT_SHAPE = (1, 300, 6)
 PRECISION = "fp32_tf32"
 PROVIDER = "tensorrt-cuda"
 CACHE_SCHEMA_VERSION = 2
-_CACHE_PREFIX = "person-fp32-tf32"
+_CACHE_PREFIX = "drone-fp32-tf32"
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 _MAX_ENGINE_BYTES = 2 * 1024 * 1024 * 1024
 
@@ -125,7 +126,7 @@ def make_engine_fingerprint(
     if tuple(input_shape) != INPUT_SHAPE or precision != PRECISION:
         raise TensorRTDetectorError(
             "invalid_fingerprint",
-            "Only the fixed 1x3x640x640 FP32/TF32 profile is supported.",
+            "Only the fixed 1x3x1280x1280 FP32/TF32 profile is supported.",
         )
     if (
         isinstance(workspace_size_bytes, bool)
@@ -435,7 +436,12 @@ def _build_serialized_engine(
         input_tensor = network.get_input(0)
         if tuple(int(dimension) for dimension in input_tensor.shape) != INPUT_SHAPE:
             raise TensorRTDetectorError(
-                "unsupported_model", "The ONNX model must use a fixed 1x3x640x640 input."
+                "unsupported_model", "The drone ONNX model must use a fixed 1x3x1280x1280 input."
+            )
+        output_shape = tuple(int(dimension) for dimension in network.get_output(0).shape)
+        if output_shape != OUTPUT_SHAPE:
+            raise TensorRTDetectorError(
+                "unsupported_model", "The drone ONNX model must output 1x300x6 detection rows."
             )
         config = builder.create_builder_config()
         set_pool_limit = getattr(config, "set_memory_pool_limit", None)
@@ -463,22 +469,7 @@ def _build_serialized_engine(
         ) from None
 
 
-def _bbox_iou(
-    first: tuple[float, float, float, float],
-    second: tuple[float, float, float, float],
-) -> float:
-    ax1, ay1, ax2, ay2 = first
-    bx1, by1, bx2, by2 = second
-    intersection_width = max(0.0, min(ax2, bx2) - max(ax1, bx1))
-    intersection_height = max(0.0, min(ay2, by2) - max(ay1, by1))
-    intersection = intersection_width * intersection_height
-    union = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1) + max(0.0, bx2 - bx1) * max(
-        0.0, by2 - by1
-    ) - intersection
-    return intersection / union if union > 0 else 0.0
-
-
-def _decode_person_output(
+def _decode_drone_output(
     output: np.ndarray,
     *,
     frame_width: int,
@@ -487,63 +478,44 @@ def _decode_person_output(
     pad_x: float,
     pad_y: float,
     confidence_threshold: float,
-    nms_threshold: float,
 ) -> list[tuple[tuple[float, float, float, float], float]]:
+    """Restore original frame coordinates from YOLO26's final xyxy rows."""
     tensor = np.asarray(output)
-    if tensor.ndim == 3 and tensor.shape[0] == 1:
-        tensor = tensor[0]
-    if tensor.ndim != 2:
+    if tensor.shape != OUTPUT_SHAPE:
         raise TensorRTDetectorError(
-            "unsupported_output", "The TensorRT model returned an unsupported output tensor."
+            "unsupported_output", "The drone model must return 1x300x6 detection rows."
         )
-    if tensor.shape[0] == 5:
-        rows = tensor.T
-    elif tensor.shape[1] == 5:
-        rows = tensor
-    else:
-        raise TensorRTDetectorError(
-            "unsupported_output", "The TensorRT model returned an unsupported person tensor."
-        )
-    candidates = rows[rows[:, 4] >= confidence_threshold]
-    boxes: list[tuple[float, float, float, float]] = []
-    scores: list[float] = []
-    for cx, cy, width, height, confidence in candidates:
-        x1 = max(0.0, min(float(frame_width), (float(cx) - float(width) / 2 - pad_x) / scale))
-        y1 = max(0.0, min(float(frame_height), (float(cy) - float(height) / 2 - pad_y) / scale))
-        x2 = max(0.0, min(float(frame_width), (float(cx) + float(width) / 2 - pad_x) / scale))
-        y2 = max(0.0, min(float(frame_height), (float(cy) + float(height) / 2 - pad_y) / scale))
+    rows = tensor[0]
+    candidates = rows[
+        np.isfinite(rows).all(axis=1)
+        & (rows[:, 4] >= confidence_threshold)
+        & (rows[:, 5] == 0)
+    ]
+    boxes: list[tuple[tuple[float, float, float, float], float]] = []
+    for left, top, right, bottom, confidence, _ in candidates:
+        x1 = max(0.0, min(float(frame_width), (float(left) - pad_x) / scale))
+        y1 = max(0.0, min(float(frame_height), (float(top) - pad_y) / scale))
+        x2 = max(0.0, min(float(frame_width), (float(right) - pad_x) / scale))
+        y2 = max(0.0, min(float(frame_height), (float(bottom) - pad_y) / scale))
         if x2 - x1 >= 1.0 and y2 - y1 >= 1.0:
-            boxes.append((x1, y1, x2, y2))
-            scores.append(float(confidence))
-    order = sorted(range(len(scores)), key=scores.__getitem__, reverse=True)
-    kept: list[int] = []
-    while order:
-        selected = order.pop(0)
-        kept.append(selected)
-        order = [
-            candidate
-            for candidate in order
-            if _bbox_iou(boxes[selected], boxes[candidate]) <= nms_threshold
-        ]
-    return [(boxes[index], scores[index]) for index in kept]
+            boxes.append(((x1, y1, x2, y2), float(confidence)))
+    return boxes
 
 
-class TensorRTPersonDetector:
-    """Fixed 640x640 TensorRT FP32/TF32 detector with one reusable CUDA stream."""
+class TensorRTDroneDetector:
+    """Fixed 1280x1280 TensorRT FP32/TF32 detector with one reusable CUDA stream."""
 
     def __init__(
         self,
         model_path: Path | str,
         cache_dir: Path | str,
         *,
-        confidence_threshold: float = 0.25,
-        nms_threshold: float = 0.45,
+        confidence_threshold: float = 0.15,
         workspace_size_bytes: int = 2 * 1024 * 1024 * 1024,
     ) -> None:
         self.model_path = Path(model_path)
         self.cache_dir = Path(cache_dir)
         self.confidence_threshold = float(confidence_threshold)
-        self.nms_threshold = float(nms_threshold)
         self.workspace_size_bytes = int(workspace_size_bytes)
         self._lock = threading.RLock()
         self._state = "unloaded"
@@ -573,7 +545,7 @@ class TensorRTPersonDetector:
                 "invalid_model", "A readable absolute ONNX model path is required."
             )
         engine_cache_paths(self.cache_dir, "0" * 64)
-        if not 0.0 <= self.confidence_threshold <= 1.0 or not 0.0 <= self.nms_threshold <= 1.0:
+        if not 0.0 <= self.confidence_threshold <= 1.0:
             raise TensorRTDetectorError(
                 "invalid_threshold", "Detection thresholds must be between zero and one."
             )
@@ -734,7 +706,12 @@ class TensorRTPersonDetector:
             input_spec = next(spec for spec in tensor_specs if spec[0] == input_names[0])
             if input_spec[2] != INPUT_SHAPE:
                 raise TensorRTDetectorError(
-                    "unsupported_engine", "The TensorRT engine input shape is not 1x3x640x640."
+                    "unsupported_engine", "The TensorRT engine input shape is not 1x3x1280x1280."
+                )
+            output_spec = next(spec for spec in tensor_specs if spec[0] == output_names[0])
+            if output_spec[2] != OUTPUT_SHAPE:
+                raise TensorRTDetectorError(
+                    "unsupported_engine", "The TensorRT engine output shape is not 1x300x6."
                 )
             for name, is_input, shape, dtype in tensor_specs:
                 element_count = int(np.prod(shape, dtype=np.int64))
@@ -818,7 +795,7 @@ class TensorRTPersonDetector:
             source = np.asarray(input_tensor)
             if tuple(source.shape) != input_buffer.shape:
                 raise TensorRTDetectorError(
-                    "invalid_input", "The detector input must have shape 1x3x640x640."
+                    "invalid_input", "The detector input must have shape 1x3x1280x1280."
                 )
             started = time.perf_counter()
             try:
@@ -876,7 +853,7 @@ class TensorRTPersonDetector:
     def detect(
         self, image: np.ndarray
     ) -> list[tuple[tuple[float, float, float, float], float]]:
-        """Detect people in a BGR uint8 frame using the bridge-compatible result format."""
+        """Detect drones in a BGR uint8 frame using original-frame coordinates."""
 
         frame = np.asarray(image)
         if frame.ndim != 3 or frame.shape[2] != 3 or frame.shape[0] < 1 or frame.shape[1] < 1:
@@ -884,20 +861,21 @@ class TensorRTPersonDetector:
         try:
             cv2 = importlib.import_module("cv2")
             height, width = frame.shape[:2]
-            scale = min(640 / width, 640 / height)
+            input_height, input_width = INPUT_SHAPE[2:]
+            scale = min(input_width / width, input_height / height)
             resized_width = max(1, round(width * scale))
             resized_height = max(1, round(height * scale))
             resized = cv2.resize(frame, (resized_width, resized_height), interpolation=cv2.INTER_LINEAR)
-            pad_x = round((640 - resized_width) / 2.0 - 0.1)
-            pad_y = round((640 - resized_height) / 2.0 - 0.1)
-            letterboxed = np.full((640, 640, 3), 114, dtype=np.uint8)
+            pad_x = round((input_width - resized_width) / 2.0 - 0.1)
+            pad_y = round((input_height - resized_height) / 2.0 - 0.1)
+            letterboxed = np.full((input_height, input_width, 3), 114, dtype=np.uint8)
             letterboxed[pad_y : pad_y + resized_height, pad_x : pad_x + resized_width] = resized
             tensor = np.ascontiguousarray(
                 letterboxed[:, :, ::-1].transpose(2, 0, 1)[None], dtype=np.float32
             )
             tensor *= 1.0 / 255.0
             output = self.infer_raw(tensor)
-            return _decode_person_output(
+            return _decode_drone_output(
                 output,
                 frame_width=width,
                 frame_height=height,
@@ -905,7 +883,6 @@ class TensorRTPersonDetector:
                 pad_x=float(pad_x),
                 pad_y=float(pad_y),
                 confidence_threshold=self.confidence_threshold,
-                nms_threshold=self.nms_threshold,
             )
         except TensorRTDetectorError:
             raise
@@ -921,7 +898,16 @@ class TensorRTPersonDetector:
     def diagnostics(self) -> dict[str, Any]:
         """Return path-free status suitable for the authenticated local API."""
 
-        with self._lock:
+        # Building a fresh engine can take minutes. Status polling must not
+        # wait behind the GPU lock while the detection worker is building it.
+        if not self._lock.acquire(blocking=False):
+            return {
+                "provider": PROVIDER,
+                "precision": PRECISION,
+                "engineState": self._state,
+                "inputShape": list(INPUT_SHAPE),
+            }
+        try:
             output_shapes = {
                 name: list(self._buffers[name].shape)
                 for name in self._output_names
@@ -948,6 +934,8 @@ class TensorRTPersonDetector:
                 ),
                 "errorCode": self._error_code,
             }
+        finally:
+            self._lock.release()
 
     def _release_resources(self) -> None:
         modules = self._modules
@@ -989,7 +977,7 @@ class TensorRTPersonDetector:
             self._release_resources()
             self._state = "closed"
 
-    def __enter__(self) -> "TensorRTPersonDetector":
+    def __enter__(self) -> "TensorRTDroneDetector":
         self.load()
         return self
 

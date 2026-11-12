@@ -1,7 +1,7 @@
 {
   "name": "yuntong-detection-workbench",
   "version": "0.1.1",
-  "description": "云瞳双摄像机实时 ONNX 人体检测工作台",
+  "description": "云瞳双摄像机实时无人机检测工作台",
   "author": "云瞳",
   "private": true,
   "type": "module",
@@ -45,6 +45,9 @@
     "asar": true,
     "asarUnpack": [
       "desktop-dist/models/**/*"
+    ],
+    "extraResources": [
+      { "from": "models/drone.onnx", "to": "models/drone.onnx" }
     ],
     "npmRebuild": false,
     "directories": {

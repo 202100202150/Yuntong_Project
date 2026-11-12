@@ -1,635 +1,479 @@
-# 云瞳视觉监测项目
+# 云瞳视觉监测项目 (v2.0)
 
-本仓库包含两套可以独立运行的视觉监测软件。请先根据用途选择入口：
+双摄像机无人机检测工作台提供 Web 和 Electron 两种入口。项目目录也包含独立运行的 AIRSPACE / UAVGuard。
 
 | 软件 | 用途 | 运行入口 | 默认访问方式 |
 | --- | --- | --- | --- |
-| 云瞳双摄像机人物检测工作台 | 两路 RTSP 实时预览、TensorRT 人体检测、2D / 3D 定位显示、跟踪、带框录像与抓拍 | `desktop-app` | Electron 桌面窗口 |
-| 云瞳 AIRSPACE / UAVGuard | 双目空中小目标检测、三角定位、三维轨迹和事件监控 | `云瞳AIRSPACE_UAVGuard_AI开发移交_2026-09-04\yuntong-airspace-uavguard` | 后端 `http://127.0.0.1:8080`；独立前端通常为 `http://localhost:3000` |
+| **云瞳双摄像机无人机检测工作台（v2 Web 版）** | 双路 RTSP 预览、TensorRT 无人机检测、双目测距与方向估计、2D/3D 空间显示、带框录像与抓拍。 | `frontend` + `backend` | 前端 `http://localhost:5173` |
+| **云瞳双摄像机无人机检测工作台（Electron 桌面版）** | 在独立窗口运行，复用 Python 摄像机服务进行检测与定位。 | `desktop-app` | Electron 桌面窗口 |
+| **云瞳 AIRSPACE / UAVGuard** | 双目空中小目标检测、三角定位、三维轨迹和事件监控。 | `云瞳AIRSPACE_UAVGuard_AI开发移交_2026-09-04\yuntong-airspace-uavguard` | 后端 `http://127.0.0.1:8080`；独立前端 `http://localhost:3000` |
 
-两套软件互不替代，也不共用 Python 虚拟环境。只想查看摄像机中的人物，请运行第一套；想体验校园低空三维监控演示，请运行第二套。
+工作台用于无人机检测与近似空间定位。米制定位依赖两台相机的有效标定和双路匹配。
 
-> 能力边界：人物检测工作台只检测完整人体 `person`，不做人脸、身份或性别识别。UAVGuard 当前是可运行 MVP 和工程骨架，不能宣称已经完成现场无人机识别验收。两套软件都不包含干扰、截控或自动反制功能。
+## 更新日志
 
-## 最近更新（2026/10/9）
+- **2026-11-10** 接入 `drone.onnx` 和 TensorRT 推理。使用双路检测框中心做三角测量，输出 XYZ、距离、方位角和仰角。加入目标编号、跳点过滤、短时位置保持和界面插值。
+- **2026-11-08** 调整后端启动顺序，成功监听端口后再启动摄像机服务，端口冲突时提示关闭旧后端。
+- **2026-11-06** 支持成对导入外参，自动计算基线、两光心的左右关系及相对中点的位置。
 
-最新修改时间：**2026/10/9 15:47（北京时间，UTC+8）**。以下为本轮更新相对于原有版本新增或调整的效果，范围为 `desktop-app` 的空间场景与相关说明：
+## v2.0 架构升级说明
 
-- 更新 3D 网格场景，支持左键旋转、左右键同时拖动平移和滚轮缩放；保留地面的完整 X/Z 范围，删除 Y 负方向的网格与刻度。
-- 加入浅橙色校园建筑模拟块，参照深圳技术大学图书馆、人工智能学院、城市交通与物流学院、中德智能制造学院、C-5 教学楼和行政楼的相对布局与高度比例。六组建筑不显示名称，以整体占地范围中心对齐原点，并统一放大 17%，全部保持在地面网格内。未公开的楼高按楼层和照片估算，模型用于场景显示模拟。
-- 标题右侧增加左 `3D`、右 `2D` 的切换按钮，标题随模式变为“3D 空间定位”或“2D 平面定位”。每次切换恢复对应模式的初始视角、缩放和平移。
-- 2D 为从上方沿 Y 轴负方向观察的俯视图，只显示 X、Z 轴和原点，不显示 Y 轴与竖直参考面；建筑轮廓使用同一组三维体块，合并同高度共边，保留庭院边界和塔楼屋顶分界。
-- 模式切换只改变场景显示，不中断正在运行的检测；目标和匹配信息持续更新，返回 3D 后仍显示最新目标。原有检测算法、目标圆点样式、摄像机配置和 GPU 虚拟环境保持原样。
+相比于 v1.0 的纯 Electron 桌面端，v2.0 版本进行了彻底的架构解耦与前端重写：
+
+1. **前后端分离**：引入了 Node.js (`backend`) 作为中间件，将前端的 UI 渲染与 Python 的重度 AI 推理解耦。
+2. **Vue 3 重构**：前端从 React 迁移至 Vue 3 + TypeScript + Pinia，提供更丰富的交互动效和深浅色主题切换。
+3. **3D 校园沙盘重写**：移除了庞大的 Three.js 依赖，使用原生 Canvas 2D 引擎手写正交投影算法，1:1 还原了深圳技术大学 6 栋校园建筑的 3D 轮廓与 2D 俯视平面图，并支持平滑的平移、旋转、缩放。
+4. **全局状态打通**：采用 Pinia 管理全局相机状态（包括流状态、FPS、检测框、检测帧率上限），实现“设备管理”、“模型配置”与“工作台”的数据同步。
+5. **一键启动**：新增了本地一键启动脚本，自动拉起前后端并清理端口。
 
 ## 目录
 
-- [最近更新（2026/10/9）](#最近更新2026109)
+- [更新日志](#更新日志)
 - [最快运行方式](#最快运行方式)
 - [项目结构](#项目结构)
-- [一、双摄像机人物检测工作台](#一双摄像机人物检测工作台)
-- [二、AIRSPACE / UAVGuard（新增）](#二airspace--uavguard新增)
-- [测试与开发命令](#测试与开发命令)
+- [一、双摄像机无人机检测工作台](#一双摄像机无人机检测工作台)
+- [二、AIRSPACE / UAVGuard](#二airspace--uavguard)
+- [环境与依赖排错](#环境与依赖排错)
 - [数据安全与合规](#数据安全与合规)
 - [许可证](#许可证)
+- [三、首次部署与运行（Windows + Python 虚拟环境）](#三首次部署与运行windows--python-虚拟环境)
 
 ## 最快运行方式
 
-### 运行人物检测桌面软件
+### 运行 v2 Web 端（推荐使用一键启动）
 
+**前置条件**：确保你已经配置好了底层的 Python GPU 环境（详见下文“系统要求”）。
+
+**一键启动（Windows）**：
+在项目根目录 `Yuntong_Project-master` 下，直接双击运行 **`一键启动.bat`**。
+
+脚本先清理 8000 端口占用并启动 Node.js 后端，固定等待 3 秒后启动 Vue 前端。Node.js 成功监听端口后启动 Python 摄像机服务。
+
+**手动启动（Windows）**
+
+打开两个终端，从项目根目录分别启动后端和前端。
+
+1. **启动 Node.js 后端**
+   ```powershell
+   cd backend
+   npm install
+   npm run dev
+   ```
+
+2. **启动 Vue 3 前端**
+   ```powershell
+   cd frontend
+   npm install
+   npm run dev
+   ```
+
+启动成功后，打开浏览器访问 <http://localhost:5173>。使用测试账号 `test`，密码 `904` 登录后即可进入工作台。
+
+### 运行 Electron 桌面版
 如果本机已经完成 GPU 环境配置，并且 `camera-rtsp-low-latency\.env` 中已经填写两台摄像机，执行：
-
 ```powershell
-Set-Location -LiteralPath 'E:\Yuntong_Project-master\Yuntong_Project-master\desktop-app'
+Set-Location .\desktop-app
 npm run desktop:run
 ```
-
-程序会先构建 React 页面，再打开 Electron 窗口，并自动启动 Python 摄像机 Sidecar。进入界面后点击 `Start` 才会开始人物检测；软件启动本身不会自动录像或抓拍。
-
-如果启动失败，先运行：
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\scripts\gpu\verify-gpu-stack.ps1
-```
-
-如果验证器提示环境缺失，请按后文[首次部署](#首次部署)完成安装。
-
-> 从压缩包解压、移动项目目录或更换 Windows 用户后，不要直接复用别人生成的 `.venv`。先执行 `.\work\gpu-runtime\.venv\Scripts\python.exe --version`；如果错误信息仍指向旧电脑路径，请只删除 `desktop-app\work\gpu-runtime\.venv`，再运行 `setup-gpu-env.ps1` 重新创建。TensorRT engine 同样应在本机重新生成。
-
-### 运行 AIRSPACE / UAVGuard 演示
-
-只启动 Python 后端和内置基础监控页：
-
-```powershell
-$UavRoot = 'E:\Yuntong_Project-master\Yuntong_Project-master\云瞳AIRSPACE_UAVGuard_AI开发移交_2026-09-04\yuntong-airspace-uavguard'
-Set-Location -LiteralPath $UavRoot
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -U pip
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\uavguard.exe --config config/demo.yaml
-```
-
-打开 <http://127.0.0.1:8080>，接口文档位于 <http://127.0.0.1:8080/docs>。
-
-演示模式使用合成双摄像机和模拟飞行轨迹，不需要连接真实摄像机，也不代表真实识别准确率。
-
-如果还要运行新的 AIRSPACE React 前端，请保持后端终端不动，另开一个 PowerShell：
-
-```powershell
-$UavRoot = 'E:\Yuntong_Project-master\Yuntong_Project-master\云瞳AIRSPACE_UAVGuard_AI开发移交_2026-09-04\yuntong-airspace-uavguard'
-Set-Location -LiteralPath (Join-Path $UavRoot 'frontend')
-npm ci
-npm run dev
-```
-
-打开终端显示的地址，通常是 <http://localhost:3000>。前端默认使用浏览器内的模拟数据；要连接已启动的 Python 演示后端，请在页面“接入配置”中选择“实时网关”，基础地址留空。
 
 ## 项目结构
 
 ```text
-Yuntong_Project-master\
-├─ README.md
-├─ desktop-app\                         Electron + React + TypeScript 桌面应用
-│  ├─ components\
-│  ├─ desktop\
-│  │  └─ public\
-│  │     ├─ models\person-v1.onnx       TensorRT 使用的 person ONNX 模型
-│  │     └─ ort\                        浏览器侧 ONNX Runtime WASM 资源
-│  ├─ lib\
-│  ├─ scripts\gpu\                     GPU 环境与 OpenCV CUDA 构建脚本
-│  ├─ tests\
-│  └─ package.json
-├─ camera-rtsp-low-latency\             人物检测工作台的 Python Sidecar
-│  ├─ camera_bridge.py
-│  ├─ camera_low_latency.py
-│  ├─ camera_inspect.py
-│  ├─ tensorrt_person_detector.py
-│  ├─ requirements-gpu.txt
-│  └─ .env.example
-└─ 云瞳AIRSPACE_UAVGuard_AI开发移交_2026-09-04\
-   └─ yuntong-airspace-uavguard\        独立的低空三维监控系统
-      ├─ src\uavguard\
-      ├─ frontend\
-      ├─ config\
-      ├─ calibration\
-      ├─ tools\
-      ├─ tests\
-      └─ docs\
+Yuntong_Project-master/
+├── backend/                       # Node.js 中间件后端服务
+│   ├── src/
+│   │   ├── normalize/             # 状态数据清洗与格式化
+│   │   ├── routes/                # API 路由 (状态、推流、检测、录像、设备等)
+│   │   ├── sidecar/               # Python 子进程生命周期管理 (启动/停止)
+│   │   ├── ws/                    # WebSocket 帧接口
+│   │   └── index.mjs              # Node.js 服务启动入口
+│   ├── .env                       # 后端环境变量配置
+│   └── package.json
+├── frontend/                      # Vue 3 前端界面 (v2 新增)
+│   ├── src/
+│   │   ├── api/                   # 前后端通信 API 封装
+│   │   ├── assets/                # 静态资源 (图片、图标)
+│   │   ├── components/            # 公共组件 (CameraPanel 等)
+│   │   ├── layouts/               # 布局组件 (MainLayout 侧边栏/顶栏)
+│   │   ├── lib/                   # 建筑模型与界面辅助函数
+│   │   ├── router/                # Vue Router 路由配置
+│   │   ├── stores/                # Pinia 全局状态管理
+│   │   ├── styles/                # 全局 CSS 样式
+│   │   ├── types/                 # TypeScript 接口定义
+│   │   └── views/                 # 页面视图 (首页、工作台、设备管理等)
+│   └── package.json
+├── desktop-app/                   # Electron 桌面应用与 GPU 环境
+│   ├── models/drone.onnx          # 无人机检测模型
+│   ├── desktop-dist/              # 桌面前端构建产物
+│   └── work/gpu-runtime/.venv/    # Python GPU 虚拟环境
+├── camera-rtsp-low-latency/       # Python AI Sidecar 核心拉流与推理端
+│   ├── camera_bridge.py           # 提供 HTTP 服务，管理相机生命周期
+│   ├── camera_low_latency.py      # 低延迟拉流与解码
+│   ├── tensorrt_drone_detector.py # TensorRT 无人机检测
+│   ├── spatial_localization.py   # 双目三角测量
+│   ├── drone_tracking.py         # 三维目标跟踪与平滑
+│   └── .env                       # 相机 IP、账号密码及拉流参数配置
+├── 云瞳AIRSPACE_UAVGuard...\      # 独立的低空三维监控系统
+└── 一键启动.bat                   # Windows 本地一键启动脚本
 ```
 
-## 一、双摄像机人物检测工作台
+## 一、双摄像机无人机检测工作台
 
 ### 主要功能
 
-- 同时连接两台支持 RTSP 的网络摄像机；
-- 双路低延迟实时预览；
-- 使用 NVIDIA GPU 和 TensorRT 检测 `person`；
-- 每路独立进行 IoU 目标跟踪并生成稳定对象 ID；
-- 同一组检测目标可在 3D 空间场景与 2D 俯视平面之间切换显示，切换时检测继续运行；
-- 提供六组浅橙色校园模拟建筑，支持场景旋转、平移、缩放与当前模式视角重置；
-- 同时启动、暂停或停止两路检测；
-- 同时录制两路带检测框的视频；
-- 同时保存两路带检测框的全分辨率抓拍；
-- 录像优先使用 NVIDIA NVENC，不可用时自动降级到 `libx264`；
-- 摄像机凭据只保存在本机 `.env`；
-- 未点击 `Record` 或 `Screenshot` 时不保存摄像机媒体。
+- 同时连接两台 RTSP 摄像机，Web 前端通过 HTTP 获取成对的 JPEG 预览帧。
+- 使用 NVIDIA GPU 和 TensorRT 运行 `drone.onnx`，在预览中显示无人机检测框。
+- 在 3D/2D 地图中显示目标编号、XYZ、距离、方位角和仰角。地图支持旋转、缩放和平移。
+- 支持两路带框录像和手动抓拍。
 
-运行链路：
-
+### 运行链路
 ```text
 两路 RTSP 摄像机
-  → Python / PyAV 解码
-  → TensorRT person 检测
-  → 每路独立目标跟踪
-  → 内存预览、带框录像或带框抓拍
-  → 仅监听 127.0.0.1 的本地 Sidecar
-  → Electron 主进程
-  → React 桌面界面
+  → Python / PyAV 解码 → 双路配帧 → TensorRT 无人机检测
+  → Python 三角测量与三维跟踪
+    ├─ Node.js HTTP API → Vue 3 网页前端
+    └─ Electron 主进程与 IPC → Electron 桌面前端
 ```
 
-`desktop-app` 默认从同一仓库的兄弟目录寻找 `camera-rtsp-low-latency`，因此完整仓库可以放在任意有写入权限的目录，不依赖开发者原来的盘符。
+### 系统要求 (GPU 环境)
+运行环境要求基本与 v1 一致，这是跑通底层的核心：
+- Windows 10/11 x64 / Node.js `22.13.0` 以上
+- CPython `3.12.13` x64
+- NVIDIA 显卡驱动 / CUDA Toolkit `12.9` / TensorRT `11.3.0.99`
+- **GPU 计算能力需为 8.9（SM 8.9，例如 RTX 4070）**；当前 GPU 脚本不接受其他算力
 
-### 系统要求
-
-当前自动化脚本按以下环境编写并验证：
-
-- Windows 10/11 x64；
-- PowerShell 5.1 或 PowerShell 7；
-- Node.js `22.13.0` 或更高版本及 npm；
-- CPython `3.12.13` x64，或由 `uv` 自动安装；
-- NVIDIA 显卡驱动；
-- CUDA Toolkit `12.9`；
-- NVIDIA GPU Compute Capability `8.9`，当前脚本对应 RTX 4070 / Ada；
-- TensorRT `11.3.0.99`；
-- Visual Studio 2022 Build Tools，包含“使用 C++ 的桌面开发”、MSVC v143、Windows SDK 和 CMake tools；
-- CMake `3.28` 或更高版本；
-- 两台可从运行电脑访问并已启用 RTSP 的网络摄像机；
-- 首次构建 OpenCV CUDA 建议预留至少 20 GB 磁盘空间。
-
-#### GPU 兼容性
-
-当前脚本固定编译 CUDA 架构 `SM 8.9`。如果显卡的 Compute Capability 不是 8.9，验证器会拒绝继续，不能直接假设兼容。适配其他架构时，需要同步修改并重新验证：
-
-```text
-desktop-app\scripts\gpu\common.ps1
-desktop-app\scripts\gpu\build-opencv-cuda.ps1
-desktop-app\scripts\gpu\verify_gpu_stack.py
-```
-
-TensorRT engine 与 ONNX 模型、TensorRT 版本、GPU 架构和精度配置绑定。不要从其他电脑复制 engine；目标电脑会在第一次启动检测时自行构建并缓存。
-
-### 首次部署
-
-以下命令从仓库根目录开始：
-
-```powershell
-Set-Location -LiteralPath 'E:\Yuntong_Project-master\Yuntong_Project-master'
-```
-
-#### 1. 配置两台摄像机
-
-```powershell
-Copy-Item .\camera-rtsp-low-latency\.env.example `
-          .\camera-rtsp-low-latency\.env
-notepad .\camera-rtsp-low-latency\.env
-```
-
-至少修改：
-
-```dotenv
-CAMERA1_IP=<第一台摄像机IP>
-CAMERA2_IP=<第二台摄像机IP>
-
-CAMERA_RTSP_PORT=554
-CAMERA_USERNAME=<摄像机用户名>
-CAMERA_PASSWORD=<摄像机密码>
-
-CAMERA_CHANNEL=1
-CAMERA_STREAM=main
-CAMERA_TRANSPORT=tcp
-
-CAMERA1_OUTPUT_DIR=outputs\camera1
-CAMERA2_OUTPUT_DIR=outputs\camera2
-CAMERA_SNAPSHOT_FORMAT=png
-CAMERA_RECORD_ON_START=false
-```
-
-两台摄像机使用不同账号时，可以增加：
-
-```dotenv
-CAMERA1_USERNAME=<第一台用户名>
-CAMERA1_PASSWORD=<第一台密码>
-CAMERA2_USERNAME=<第二台用户名>
-CAMERA2_PASSWORD=<第二台密码>
-```
-
-相对输出目录默认解析为：
-
-```text
-camera-rtsp-low-latency\outputs\camera1
-camera-rtsp-low-latency\outputs\camera2
-```
-
-也可以使用其他有写入权限的绝对路径。先测试 RTSP 端口：
-
-```powershell
-Test-NetConnection <第一台摄像机IP> -Port 554
-Test-NetConnection <第二台摄像机IP> -Port 554
-```
-
-`.env` 已被 Git 忽略。不要把真实密码写入 `.env.example`、README、Issue、截图或日志。
-
-#### 2. 安装桌面依赖
-
-```powershell
-Set-Location .\desktop-app
-node --version
-npm ci
-```
-
-Node.js 版本低于 `22.13.0` 时，先升级并重新打开 PowerShell。
-
-#### 3. 安装 CUDA 与 C++ 构建工具
-
-安装 CUDA Toolkit 12.9 后，重新打开 PowerShell并检查：
-
-```powershell
-& 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9\bin\nvcc.exe' --version
-nvidia-smi --query-gpu=name,compute_cap,driver_version --format=csv,noheader
-cmake --version
-```
-
-只有 NVIDIA 驱动并不够，`nvcc.exe` 必须存在。CMake 版本应不低于 3.28。
-
-#### 4. 创建项目专用 GPU Python 环境
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-```
-
-方式 A：使用 `uv` 自动准备 Python 3.12.13：
-
-```powershell
-winget install --id astral-sh.uv -e
-```
-
-重新打开 PowerShell，回到 `desktop-app` 后执行：
-
-```powershell
-.\scripts\gpu\setup-gpu-env.ps1
-```
-
-如果项目来自压缩包，并且携带的旧 `.venv` 指向另一台电脑，请先在 `desktop-app` 中删除且只删除该虚拟环境，再执行上面的脚本：
-
-```powershell
-Remove-Item -LiteralPath .\work\gpu-runtime\.venv -Recurse -Force
-.\scripts\gpu\setup-gpu-env.ps1
-```
-
-方式 B：使用已有的 CPython 3.12.13 x64：
-
-```powershell
-.\scripts\gpu\setup-gpu-env.ps1 `
-  -BasePython 'D:\Python312\python.exe'
-```
-
-虚拟环境会创建在：
-
-```text
-desktop-app\work\gpu-runtime\.venv
-```
-
-脚本会根据 `camera-rtsp-low-latency\requirements-gpu.txt` 安装固定版本的 PyAV、NumPy、TensorRT bindings/runtime、CUDA Python、requests 和 python-dotenv，并单独安装 TensorRT 的 `tensorrt-cu12` Python 入口包（它提供 `import tensorrt`，且需要允许 pip 构建这个小型 source package）。不要把全局 Python 或训练环境直接作为正式运行环境，也不要在这个 GPU 环境中手工安装 PyPI 的 `opencv-python`、`opencv-python-headless` 或 `opencv-contrib-python`。
-
-#### 5. 构建 OpenCV CUDA
-
-```powershell
-.\scripts\gpu\build-opencv-cuda.ps1 `
-  -CudaRuntimeRoot 'E:\Codex\yuntongsoftware\software\work\opencv-cuda\cuda-runtime-overlay' `
-  -Jobs 8
-```
-
-命令中的 CUDA runtime overlay 是这台电脑旧软件已有的 CUDA 12.9 开发文件缓存；脚本只读取它，新 OpenCV 源码、编译产物和 Python venv 仍放在本项目的 `desktop-app\work` 内。若在没有旧缓存的电脑上部署，需先将脚本要求的 `nvidia-cuda-runtime-cu12==12.9.79` 开发文件准备到 `desktop-app\work\opencv-cuda\cuda-runtime-overlay`，或把 `-CudaRuntimeRoot` 指向该版本已准备好的目录。脚本随后会获取并校验 OpenCV 5.0.0 与 opencv_contrib 5.0.0，使用 Visual Studio 2022 为 CUDA 12.9 / SM 8.9 构建所需模块并接入项目虚拟环境。首次执行需要下载源码并本地编译；中断后可重新运行，继续使用 `desktop-app\work` 下的受控缓存。
-
-#### 6. 验证 GPU 运行栈
-
-```powershell
-.\scripts\gpu\verify-gpu-stack.ps1
-```
-
-验证器会实际检查 Python 版本和位数、GPU 与 Compute Capability、CUDA Toolkit、TensorRT、CUDA Python、OpenCV CUDA 构建信息，以及 GPU upload、CUDA resize 和 download 冒烟测试。只有完整通过才表示运行环境已经准备好。
-
-#### 7. 检查部署模型
-
-```powershell
-Test-Path .\desktop\public\models\person-v1.onnx
-```
-
-预期输出 `True`。检测器要求固定输入 `1 × 3 × 640 × 640`、单输入、单输出，并支持当前代码约定的 YOLO `person` 输出布局。
-
-替换 ONNX 后，只删除生成的 TensorRT 缓存，不要删除模型：
-
-```powershell
-Remove-Item -Recurse -Force .\work\tensorrt -ErrorAction SilentlyContinue
-```
-
-#### 8. 启动软件
-
-```powershell
-npm run desktop:run
-```
-
-启动时会构建 React 前端、打开 Electron、定位 Python Sidecar，并使用 `desktop-app\work\gpu-runtime\.venv` 启动 `camera_bridge.py`。首次点击 `Start` 时，TensorRT 可能需要生成 engine，等待时间会明显长于后续启动。
+以下“首次部署与运行”章节是本项目 GPU 环境的完整操作顺序。
 
 ### 界面操作
-
 | 按钮 | 作用 |
 | --- | --- |
-| `Start` | 同时启动两路人物检测和跟踪 |
-| `Pause` | 暂停检测，实时预览继续 |
-| `Stop` | 停止检测并清除跟踪结果 |
-| `Record` | 同时开始两路带检测框录像；再次点击停止并完成文件封装 |
-| `Screenshot` | 同时保存两路带检测框抓拍 |
-| `Fullscreen` | 进入或退出全屏 |
-| `3D` / `2D` | 切换空间定位与俯视平面，恢复所选模式的初始视角，不停止检测 |
-| `重置视角` | 恢复当前 3D 或 2D 模式的初始视角、缩放和平移 |
+| `开始检测 / 暂停检测` | 控制 Python 端是否启动 AI 推理线程（停用后只推流，画面继续） |
+| `开始录制` | 同时开始两路带框录像 |
+| `截图保存` | 触发两侧快照 |
+| `3D / 2D` | 切换左上角空间视图的投影模式 |
+| `全屏显示` | 进入浏览器全屏或原生全屏 |
 
-建议先点击 `Start`，确认两路画面出现 `person` 框，再使用 `Record` 或 `Screenshot`。直接关闭软件前，应先停止录像，让文件完成封装。
+### 设计细节说明
+1. **配帧与定位**。程序用同一台电脑的单调时钟记录两路帧到达时间，并根据码流积压估算帧时刻。实时画面和录像的时间水印不参与配帧。两路估计帧差最多为 40 ms。定位取两路完整检测框的中心，使用内外参三角测量。
+2. **三维跟踪**。同一目标沿用编号。后端平滑 XYZ 并过滤突变，前端对显示坐标做插值。短时漏检时，地图以灰色保留最近一次有效位置，约 0.45 秒后清除。单路检测可显示预览框，更新三维位置需要有效的双路配对。
+3. **运行参数**。默认预览分辨率为 768×432，预览帧率上限为 30 FPS。每路检测的配置上限为 12.5 FPS，实际帧率取决于配帧和推理耗时。
 
-场景操作：3D 中左键拖动旋转、左右键同时拖动平移；2D 中拖动仅平移，不倾斜俯视图。两种模式均支持滚轮缩放。3D 目标标签显示 X/Y/Z 坐标，2D 标签显示 X/Z 坐标；2D 中 X 向右、Z 向下。
+### 米制定位与相机标定
 
-### 自定义目录
+由外参解算的米制坐标以两台相机的光心中点为原点，X 向左、Y 向上、Z 向前。地图显示无人机的完整三维坐标，距离为到原点的直线距离，方向为相对相机坐标系的方位角和仰角。
 
-正常的单仓库结构不需要设置绝对路径。如果 Sidecar、Python 环境或 TensorRT 缓存位于其他位置，可在启动前覆盖：
+在「设备管理」中按 C1、C2 视频通道编号分别导入内参和外参。两份外参须使用同一个固定的 AprilGrid 坐标系，平移单位为米。成对导入后，页面自动填入基线、两台相机的位置、左右关系和原点距离。核对后点击「保存定位配置」，参数将写入 `camera-rtsp-low-latency/spatial-config.json`，供空间定位和地图共同使用。设备管理也支持导入完整定位 JSON。
 
+## 二、AIRSPACE / UAVGuard
+
+*(此部分文档与原版保持一致，主要包括：)*
+- 双路 RTSP、离线视频、合成信号源接入
+- 极线匹配与三角定位三维轨迹
+- React 独立前端展示空域状态
+- 适用于真实固定机位的相机标定与部署流程
+
+## 环境与依赖排错
+
+### 端口被占用
+如果启动 Node.js 后端时提示 8000 端口已被占用，先查找监听进程，确认是此前启动的本项目后端后再关闭。
 ```powershell
-$env:YUNTONG_CAMERA_PROJECT_DIR = 'D:\Projects\camera-rtsp-low-latency'
-$env:YUNTONG_CAMERA_PYTHON = 'D:\PythonEnvs\yuntong\Scripts\python.exe'
-$env:YUNTONG_TENSORRT_CACHE = 'D:\Caches\yuntong-tensorrt'
-npm run desktop:run
+Get-NetTCPConnection -LocalPort 8000 -State Listen
 ```
 
-这些变量只影响当前 PowerShell 会话。
-
-### 独立检查摄像机
-
-从仓库根目录运行只读检查：
-
-```powershell
-.\desktop-app\work\gpu-runtime\.venv\Scripts\python.exe `
-  .\camera-rtsp-low-latency\camera_inspect.py `
-  --ip <摄像机IP>
-```
-
-独立启动 Python 双摄像机预览：
-
-```powershell
-Set-Location .\camera-rtsp-low-latency
-..\desktop-app\work\gpu-runtime\.venv\Scripts\python.exe camera_low_latency.py
-```
-
-独立的 `camera_low_latency.py` 使用原始压缩包 remux 录像；桌面应用的 `camera_bridge.py` 会重新编码，并把检测框烧录到视频中。
-
-### 默认性能参数
-
-- 桌面应用每路预览尺寸：`768 × 432`；
-- 预览刷新上限：30 FPS；
-- 每路检测目标频率：约 12.5 Hz；
-- 每路只保留最新待处理帧，旧帧会被丢弃；
-- 两路共用一个 TensorRT 推理线程；
-- 每路使用独立目标跟踪器。
-
-实际帧率还受摄像机源 FPS、网络、RTSP 解码、JPEG 编码、Electron 绘制和录像编码负载影响。TensorRT 提高的是检测吞吐，不能把 25 FPS 的摄像机源流变成 30 个不同的真实帧。
-
-### 人物检测工作台常见问题
-
-#### 找不到摄像机桥接程序
-
-确认 `desktop-app` 与 `camera-rtsp-low-latency` 是同级目录。如果 Sidecar 在其他位置，设置 `YUNTONG_CAMERA_PROJECT_DIR`。
-
-#### 找不到 CUDA / TensorRT Python 环境
-
-在 `desktop-app` 中检查：
-
-```powershell
-Test-Path .\work\gpu-runtime\.venv\Scripts\python.exe
-```
-
-返回 `False` 时重新执行：
-
-```powershell
-.\scripts\gpu\setup-gpu-env.ps1
-.\scripts\gpu\build-opencv-cuda.ps1 -Jobs 8
-```
-
-#### `import cv2` 成功，但 GPU 验证失败
-
-可能误装了 CPU OpenCV wheel：
-
-```powershell
-.\work\gpu-runtime\.venv\Scripts\python.exe -m pip list |
-  Select-String opencv
-```
-
-GPU 虚拟环境不应安装 `opencv-python` 或 `opencv-contrib-python` wheel；正确的 `cv2` 来自 `desktop-app\work\opencv-cuda\install`。
-
-#### 两路画面黑屏或反复重连
-
-检查摄像机在线状态、RTSP 开关、IP、端口、账号、密码、Windows 防火墙、VLAN、`CAMERA_STREAM`，以及主码流编码格式是否受当前 FFmpeg / PyAV 支持。
-
-#### 录像或抓拍没有生成文件
-
-检查 `.env` 中的 `CAMERA1_OUTPUT_DIR` 与 `CAMERA2_OUTPUT_DIR`，确认当前用户有写权限且磁盘空间充足。带框抓拍和录像应在点击 `Start` 并出现新鲜检测结果后执行。
-
-#### pip 出现 SSL EOF 或证书错误
-
-不要使用 `--trusted-host` 关闭证书验证。先检查 Windows 时间、代理、HTTPS 检查软件、组织根证书、防火墙以及 PyPI / NVIDIA 包索引连通性，再重新执行安装脚本。
-
-### 人物模型说明
-
-`person-v1.onnx` 仅用于人体目标检测：类别只有 `person`，不进行人脸识别、身份判断或性别区分，且可能漏检或误检，不应作为高风险自动决策的唯一依据。
-
-当前仓库模型文件记录的 SHA-256 为：
-
-```text
-3AF1A57313BB5377E480859239AC1994EFDAE16761C983095E097E0AAA9221D5
-```
-
-公开或再分发模型前，维护者必须确认基础权重、训练代码和数据集的许可证要求，并补充准确的模型来源、训练或导出方式、许可证与校验值。
-
-## 二、AIRSPACE / UAVGuard（新增）
-
-UAVGuard 面向两台固定网络摄像机的校园低空监测。它从双路 RTSP、离线视频或合成视频中提取小型运动目标，建立二维轨迹，通过极线约束和稀疏三角测量恢复局部 ENU 三维坐标，再使用恒加速度卡尔曼滤波形成确认轨迹。
-
-### 已实现能力
-
-- 双路 RTSP、视频文件和合成信号源接入；
-- 三帧差分、MOG2、天空掩膜、微振动补偿和二维轨迹确认；
-- 时间门限、极线匹配、DLT 三角测量、非线性重投影优化和误差协方差；
-- 三维轨迹确认、类别投票、告警 Webhook 和 SQLite 事件库；
-- FastAPI REST、WebSocket、双画面 MJPEG 和基础 ENU 监控页；
-- 独立 React 前端，提供 2D / 3D 空域、模拟轨迹、视频通道、事件中心和网关接入；
-- 内参、外参、闪灯同步与 RTK 轨迹评估工具；
-- Docker、Compose、Ubuntu service 示例和现场部署文档。
-
-### 当前能力边界
-
-- 当前是可运行 MVP，不是已经通过现场验收的成品；
-- 仓库不包含真实 RTSP 密码、现场有效标定、校园训练数据或已验收的 ONNX 权重；
-- 尚未完成真实机位内外参、ENU 原点、控制点和闪灯时间同步标定；
-- 尚未完成校园数据集训练、8 小时负样本、RTK 真值、误报率和距离分档验收；
-- 当前前端的 1 km 空域是显示范围，不代表实现了 1 km 识别；
-- 前端“聚焦”只改变视角，不会控制真实云台；
-- 几何或分类质量不足时必须保持 `candidate` 或 `unknown`，不能当作确认无人机。
-
-以现有 6 mm 镜头为背景，项目文档采用分级目标，而不是承诺全范围分类：
-
-- 100–150 m：0.5 m 多旋翼的分类与三维定位目标区；
-- 150–250 m：小目标探测、跟踪和定位目标区；
-- 250–300 m：1 m 以上固定翼目标扩展区。
-
-这些仍需现场采集与验收验证。
-
-### 后端演示
-
-要求 Python 3.11 或更高版本：
-
-```powershell
-$UavRoot = 'E:\Yuntong_Project-master\Yuntong_Project-master\云瞳AIRSPACE_UAVGuard_AI开发移交_2026-09-04\yuntong-airspace-uavguard'
-Set-Location -LiteralPath $UavRoot
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -U pip
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\uavguard.exe --config config/demo.yaml
-```
-
-- 基础监控页：<http://127.0.0.1:8080>
-- OpenAPI 文档：<http://127.0.0.1:8080/docs>
-- 健康检查：<http://127.0.0.1:8080/api/v1/health>
-
-Ubuntu 对应命令：
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -U pip
-.venv/bin/pip install -e '.[dev]'
-.venv/bin/uavguard --config config/demo.yaml
-```
-
-### 独立 React 前端
-
-要求 Node.js 22.13 或更高版本：
-
-```powershell
-Set-Location -LiteralPath (Join-Path $UavRoot 'frontend')
-npm ci
-npm run dev
-```
-
-默认前端完全离线模拟，无需后端或相机。对接 Python 后端时，在页面中选择“实时网关”；开发代理默认将 `/api` 和 `/ws` 转发到 `http://127.0.0.1:8080`。需要更改后端时，在启动前设置：
-
-```powershell
-$env:UAVGUARD_BACKEND = 'http://127.0.0.1:8080'
-npm run dev
-```
-
-真实模式连接失败时不会静默回退到模拟轨迹，避免运行人员误判。
-
-### 主要 API
-
-| 接口 | 用途 |
-| --- | --- |
-| `GET /api/v1/config` | 相机 ID 与后端演示状态 |
-| `GET /api/v1/health` | 相机、帧率、同步和模型健康状态 |
-| `GET /api/v1/tracks/active?confirmed_only=true` | 活动轨迹 |
-| `GET /api/v1/events?limit=100` | 历史事件 |
-| `GET /api/v1/cameras/{camera_id}/frame.jpg` | 单帧图像 |
-| `GET /api/v1/cameras/{camera_id}/mjpeg` | MJPEG 视频 |
-| `GET /api/v1/recordings/{path}` | 事件录像 |
-| `WS /ws/tracks` | 实时 TrackEvent |
-
-轨迹采用局部 ENU 米制坐标：x 向东、y 向北、z 向上。每条轨迹还会输出位置标准差与重投影误差。
-
-### 真实摄像机上线顺序
-
-1. 阅读 `docs\CAMERA_SETTINGS.md`，完成两机码流、安全、账号、VLAN 与 NTP 设置。
-2. 按 `docs\FIELD_DEPLOYMENT.md` 固定机位，完成内参、控制点外参、ENU 和时间偏移标定。
-3. 复制 `config\production.example.yaml` 为 `config\production.yaml`。
-4. 复制 `.env.example` 为 `.env`，只在本机或密钥管理系统中填写完整且正确 URL 编码的 RTSP 地址与服务口令。
-5. 生成 `calibration\site-cam01.yaml` 和 `calibration\site-cam02.yaml`；只有现场复核后才能设置 `valid: true`。
-6. 没有分类模型时，先保持 `classifier.model_path` 为空，验证取流、检测、关联、定位和轨迹。
-7. 按 `docs\MODEL_TRAINING.md` 训练、验证并部署 ONNX 分类模型。
-8. 按 `docs\ACCEPTANCE_AND_OPERATIONS.md` 完成受控飞行和长时间负样本验收。
-
-生产环境应使用同源 HTTPS 网关统一代理网页、REST、WebSocket 和 MJPEG；不要把开发服务器直接暴露到公网。
-
-## 测试与开发命令
-
-### 人物检测桌面应用
-
-```powershell
-Set-Location -LiteralPath 'E:\Yuntong_Project-master\Yuntong_Project-master\desktop-app'
-npm test
-npm run typecheck
-npm run lint -- --deny-warnings
-npm run build
-```
-
-Python Sidecar 单元测试：
-
-```powershell
-Set-Location -LiteralPath 'E:\Yuntong_Project-master\Yuntong_Project-master'
-.\desktop-app\work\gpu-runtime\.venv\Scripts\python.exe `
-  -m unittest discover `
-  -s .\camera-rtsp-low-latency `
-  -v
-```
-
-这些单元测试不会连接真实摄像机，也不应向正式录像目录写入媒体。
-
-开发命令：
-
-```powershell
-Set-Location .\desktop-app
-npm run dev
-npm run desktop:run
-```
-
-生成 Windows NSIS 安装包：
-
-```powershell
-npm run desktop:dist
-```
-
-当前安装包不自动捆绑完整 CUDA、TensorRT、OpenCV CUDA 和 Sidecar 环境；标准运行方式仍是按本文从源码准备 GPU 环境。
-
-### UAVGuard 后端与前端
-
-```powershell
-Set-Location -LiteralPath $UavRoot
-.\.venv\Scripts\python.exe -m pytest
-
-Set-Location .\frontend
-npm test
-npm run typecheck
-npm run lint
-npm run build
-```
-
-测试通过不等于真实现场验收完成。
+### 前端报错 `ECONNREFUSED`
+说明 Node.js 后端服务没启动或正在静默重启。请检查 `backend` 终端里是否有红字报错。
+
+### 找不到 ONNX 模型
+确认 `desktop-app/models/drone.onnx` 存在。Web 版若设置了 `YUNTONG_DRONE_MODEL`，请核对它指向的文件。首次检测会在后台准备 TensorRT 引擎，后续按模型和运行环境复用缓存。
 
 ## 数据安全与合规
-
-- 人物工作台的摄像机密码只应保存在 `camera-rtsp-low-latency\.env`；UAVGuard 的凭据只应保存在其 `.env` 或密钥管理系统中。
-- 人物检测 Sidecar 只绑定 `127.0.0.1`，Electron 每次启动都会生成短期 Bearer token。
-- 实时预览、人物检测与跟踪默认只在内存中处理，只有点击 `Record` 或 `Screenshot` 才写盘。
-- 保存目录来自本地 `.env`，前端不能提交任意文件路径。
-- 项目不会自动把摄像机画面上传到远程服务。
-- 生产相机建议置于独立 VLAN，禁止公网直接访问。
-- 不要在公开 Issue、日志或截图中暴露人员、地点、摄像机地址、Cookie、令牌或密码。
-- 部署视频监控、人体检测或校园低空监测前，应遵守当地关于隐私、监控、数据保存、提示标识、飞行活动和备案的要求。
-- 检测、分类与轨迹结果存在误报和漏报，不应作为高风险自动决策的唯一依据。
+- 摄像机密码只保存在本机 `camera-rtsp-low-latency\.env` 中。
+- 摄像机通过局域网 RTSP 接入，Python 摄像机服务监听本机回环地址。
+- 实时预览在内存中处理，点击「开始录制」或「截图保存」后写入对应文件。
+- 不建议将开发服务器直接暴露在公网。
 
 ## 许可证
+UAVGuard 子项目为 Apache-2.0。其余代码在发布前应补充适合的开源许可证声明。公开可见不等于允许复制或商业使用，需核实所有第三方依赖。
 
-UAVGuard 子项目的 `pyproject.toml` 声明为 Apache-2.0，并带有其自身 `NOTICE`。仓库其余公开副本尚未由所有者统一补充根级许可证。GitHub 或压缩包公开可见不等于自动授予复制、修改或商业使用权；正式发布前应核对全部源码、模型、训练数据和第三方依赖的授权，并添加适用的根级 `LICENSE` 与第三方声明。
+## 三、首次部署与运行（Windows + Python 虚拟环境）
+
+本节只覆盖本仓库的 backend、frontend、desktop-app 和
+camera-rtsp-low-latency。根目录的一键启动.bat 只启动已经准备好的 Node.js
+服务，不会创建 Python 虚拟环境、安装依赖、准备 GPU 或修正摄像机配置。
+以下命令均以 PowerShell 为例，并假设当前目录为：
+
+    E:\Yuntong_Project_v2\Yuntong_Project-master
+
+Python 推理侧车固定使用项目内的虚拟环境：
+
+    desktop-app\work\gpu-runtime\.venv\
+
+不要把 TensorRT、CUDA Python、PyAV 或 CUDA 版 OpenCV 安装到系统 Python，
+也不要用系统 Python 直接启动 camera_bridge.py。Node.js 依赖使用各目录自己的
+node_modules。
+
+### 3.1 首次部署前检查
+
+GPU 脚本的版本检查是严格的：
+
+| 项目 | 要求 |
+| --- | --- |
+| 操作系统 | Windows 10/11 x64 |
+| Node.js | >=22.13.0 |
+| Python | CPython 3.12.13、64 位 |
+| CUDA Toolkit | 12.9，必须有 nvcc.exe |
+| NVIDIA GPU | 计算能力必须为 8.9（SM 8.9，例如 RTX 4070） |
+| C++ 构建工具 | Visual Studio 2022 Build Tools 的 Desktop development with C++ |
+| CMake | >=3.28.0；优先使用 Visual Studio 自带的原生 CMake |
+| Git | 可访问 GitHub |
+| 磁盘空间 | OpenCV CUDA 编译盘至少 20 GB |
+
+如果 CUDA 12.9 不在默认目录，先在当前 PowerShell 会话设置环境变量：
+
+    $env:CUDA_PATH_V12_9 = 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9'
+
+然后在项目根目录执行：
+
+    node --version
+    npm --version
+    git --version
+    cmake --version
+    $cudaRoot = if ($env:CUDA_PATH_V12_9) { $env:CUDA_PATH_V12_9 } else { 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9' }
+    & "$cudaRoot\bin\nvcc.exe" --version
+    nvidia-smi --query-gpu=name,compute_cap,driver_version --format=csv
+
+最后一条必须显示 compute_cap 为 8.9。
+
+### 3.2 创建 GPU Python 虚拟环境
+
+    Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+    Set-Location 'E:\Yuntong_Project_v2\Yuntong_Project-master'
+
+若已有 CPython 3.12.13 x64，显式传入其解释器：
+
+    .\desktop-app\scripts\gpu\setup-gpu-env.ps1 `
+      -BasePython 'C:\Path\To\Python312\python.exe'
+
+若没有，可安装 uv，再让脚本自动取得固定版本：
+
+    .\desktop-app\scripts\gpu\setup-gpu-env.ps1
+
+脚本会创建 desktop-app\work\gpu-runtime\.venv，安装 requirements-gpu.txt、
+TensorRT 11.3.0.99 和 CUDA Python 12.9.7，并执行 pip check 与 TensorRT 验证。
+完成后确认虚拟环境：
+
+    & '.\desktop-app\work\gpu-runtime\.venv\Scripts\python.exe' `
+      -c "import sys, platform; print(sys.executable); print(platform.python_version()); print(64 if sys.maxsize > 2**32 else 32)"
+
+手动运行 Python 命令时可以激活环境；Node 后端启动时会直接调用该绝对路径：
+
+    & '.\desktop-app\work\gpu-runtime\.venv\Scripts\Activate.ps1'
+    python --version
+    deactivate
+
+### 3.3 编译并接入 CUDA 版 OpenCV
+
+requirements-gpu.txt 故意不安装 opencv-python。build-opencv-cuda.ps1 会从固定提交
+构建 OpenCV 5.0.0，并把 cv2 链接到上述虚拟环境，因此不要在该环境安装
+opencv-python。
+
+编译脚本还要求 CUDA 12.9 开发文件目录中直接存在：
+
+    <CudaRuntimeRoot>\include\cuda_runtime.h
+    <CudaRuntimeRoot>\lib\x64\cudart.lib
+    <CudaRuntimeRoot>\lib\x64\cuda.lib
+    <CudaRuntimeRoot>\lib\x64\cudadevrt.lib
+
+构建参数还会使用同目录中的 cudart_static.lib；准备开发目录或 overlay 时应保留
+整个 lib\x64 内容，不要只复制上面列出的三个文件。
+
+先检查完整 Toolkit：
+
+    $cudaRoot = if ($env:CUDA_PATH_V12_9) { $env:CUDA_PATH_V12_9 } else { 'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9' }
+    @("$cudaRoot\include\cuda_runtime.h","$cudaRoot\lib\x64\cudart.lib","$cudaRoot\lib\x64\cuda.lib","$cudaRoot\lib\x64\cudadevrt.lib") | ForEach-Object { '{0} : {1}' -f $_, (Test-Path -LiteralPath $_) }
+
+另外，CudaRoot 还必须包含 CUBLAS，因为构建启用了 WITH_CUBLAS：
+
+    @("$cudaRoot\include\cublas_v2.h","$cudaRoot\lib\x64\cublas.lib") | ForEach-Object { '{0} : {1}' -f $_, (Test-Path -LiteralPath $_) }
+
+上面列出的所有结果都是 True 时可直接构建：
+
+    .\desktop-app\scripts\gpu\build-opencv-cuda.ps1 `
+      -CudaRoot $cudaRoot -CudaRuntimeRoot $cudaRoot -Jobs 8
+
+如果任一文件不存在，不能把当前 Toolkit 根目录直接传给脚本。当前机器的精简
+Toolkit 虽然有 nvcc、CUBLAS 和 NPP，却没有完整的 CUDA runtime SDK；而
+`nvidia-cuda-runtime-cu12` wheel 也不会单独提供 OpenCV 5.0 编译所需的全部
+`crt`、`nv/target`、Thrust/CUB 头文件。因此直接将 `$runtime` 传给
+`-CudaRuntimeRoot` 会先后出现 `crt/host_config.h`、`npp.h`、`nv/target` 或
+`thrust/tuple.h` 缺失。
+
+推荐把这些开发头文件和 runtime 库组合到项目内的 overlay。先在 GPU 虚拟环境
+中安装与本机 CUDA 12.9 匹配的开发文件：
+
+    $venv = (Resolve-Path '.\desktop-app\work\gpu-runtime\.venv\Scripts\python.exe').Path
+    & $venv -m pip install --disable-pip-version-check --no-deps --extra-index-url https://pypi.nvidia.com `
+      'nvidia-cuda-runtime-cu12==12.9.79' `
+      'nvidia-cuda-nvcc-cu12==12.9.86' `
+      'nvidia-cuda-cccl-cu12==12.9.27'
+
+然后将 runtime wheel、Toolkit、nvcc wheel 和 CCCL wheel 的头文件合并，库和 DLL
+仍从 runtime wheel 复制：
+
+    $site = (& $venv -c "import sysconfig; print(sysconfig.get_paths()['purelib'])").Trim()
+    $runtime = Join-Path $site 'nvidia\cuda_runtime'
+    $nvccInclude = Join-Path $site 'nvidia\cuda_nvcc\include'
+    $ccclInclude = Join-Path $site 'nvidia\cuda_cccl\include'
+    $toolkitInclude = Join-Path $cudaRoot 'include'
+    $overlay = Join-Path (Resolve-Path '.\desktop-app\work\opencv-cuda') 'cuda-runtime-overlay'
+    New-Item -ItemType Directory -Force "$overlay\include","$overlay\lib\x64","$overlay\bin" | Out-Null
+    Copy-Item "$runtime\include\*" "$overlay\include" -Recurse -Force
+    Copy-Item "$toolkitInclude\*" "$overlay\include" -Recurse -Force
+    Copy-Item "$nvccInclude\*" "$overlay\include" -Recurse -Force
+    Copy-Item "$ccclInclude\*" "$overlay\include" -Recurse -Force
+    Copy-Item "$runtime\lib\x64\*" "$overlay\lib\x64" -Recurse -Force
+    Copy-Item "$runtime\bin\*" "$overlay\bin" -Recurse -Force
+    @(
+      "$overlay\include\cuda_runtime.h",
+      "$overlay\include\crt\host_config.h",
+      "$overlay\include\nv\target",
+      "$overlay\include\thrust\tuple.h",
+      "$overlay\include\npp.h",
+      "$overlay\include\cublas_v2.h",
+      "$overlay\lib\x64\cudart.lib",
+      "$overlay\lib\x64\cuda.lib",
+      "$overlay\lib\x64\cudadevrt.lib",
+      "$overlay\lib\x64\cudart_static.lib",
+      "$overlay\bin\cudart64_12.dll"
+    ) | ForEach-Object { '{0} : {1}' -f $_, (Test-Path -LiteralPath $_) }
+    $runtimeBin = "$overlay\bin"
+
+这些检查必须全部为 True。随后始终使用 overlay 构建；CudaRoot 仍指向包含
+nvcc、CUBLAS 和 NPP 的 CUDA Toolkit：
+
+    $env:CUDA_PATH = $cudaRoot
+    $env:CUDA_PATH_V12_9 = $cudaRoot
+    $env:PATH = "$cudaRoot\bin;$overlay\bin;$env:PATH"
+    .\desktop-app\scripts\gpu\build-opencv-cuda.ps1 `
+      -CudaRoot $cudaRoot -CudaRuntimeRoot $overlay -Jobs 8
+
+这一步会下载固定版本的 OpenCV/opencv_contrib 并在 desktop-app\work\opencv-cuda
+下编译。OpenCV 编译完成后，建议把 runtime wheel 的 DLL 复制到 OpenCV 安装目录中。
+项目生成的 pth 会通过 os.add_dll_directory 加载该目录；仅设置 PATH 在部分
+Windows Python 版本上仍可能无法满足 cv2 的首次 DLL 加载：
+
+    if (-not (Test-Path -LiteralPath variable:runtimeBin)) {
+      if (Test-Path "$cudaRoot\bin\cudart64_12.dll") { $runtimeBin = "$cudaRoot\bin" }
+      elseif (Test-Path -LiteralPath variable:runtime) { $runtimeBin = Join-Path $runtime 'bin' }
+    }
+    $opencvBin = (Get-ChildItem '.\desktop-app\work\opencv-cuda\install' -Recurse -Filter 'opencv_core*.dll' | Select-Object -First 1).DirectoryName
+    if ((Test-Path -LiteralPath variable:runtimeBin) -and (Test-Path "$runtimeBin\cudart64_12.dll")) { Copy-Item "$runtimeBin\cudart64_12.dll" $opencvBin -Force }
+    & $venv -c "import cv2; print(cv2.__version__)"
+
+如果使用 overlay 而不是 wheel，先把 wheel 的 bin 文件复制到受控目录，并将
+$runtimeBin 指向该目录。上面的 import cv2 必须成功；失败时不要继续启动 Node。
+成功后验证完整栈：
+
+    & '.\desktop-app\work\gpu-runtime\.venv\Scripts\python.exe' `
+      '.\desktop-app\scripts\gpu\verify_gpu_stack.py' `
+      --opencv-install-root '.\desktop-app\work\opencv-cuda\install'
+
+必须看到 GPU STACK VERIFICATION PASSED。没有 CPU 推理备用路径。
+
+### 3.4 准备模型与摄像机配置
+
+Web 版和源码运行的桌面版默认读取 `desktop-app/models/drone.onnx`。在项目根目录确认文件存在。
+
+    Test-Path -LiteralPath '.\desktop-app\models\drone.onnx' -PathType Leaf
+
+当前检测器要求 ONNX 输入为 `1×3×1280×1280`，输出为 `1×300×6`。Web 版如需使用其他兼容模型，在 `backend/.env` 中设置 `YUNTONG_DRONE_MODEL`。相对路径以 `desktop-app` 为基准。
+
+首次配置相机时，若本地没有 `camera-rtsp-low-latency/.env`，复制模板并填写真实值。
+
+    Copy-Item '.\camera-rtsp-low-latency\.env.example' '.\camera-rtsp-low-latency\.env'
+    notepad '.\camera-rtsp-low-latency\.env'
+
+至少替换 CAMERA1_IP、CAMERA2_IP、CAMERA_USERNAME、CAMERA_PASSWORD，并确认
+CAMERA_RTSP_PORT=554、CAMERA_CHANNEL=1、CAMERA_STREAM=main、
+CAMERA_TRANSPORT=tcp。两台账号不同时使用 CAMERA1_USERNAME/CAMERA1_PASSWORD
+和 CAMERA2_USERNAME/CAMERA2_PASSWORD。设备路径不同则设置 CAMERA1_RTSP_PATH
+和 CAMERA2_RTSP_PATH。不要保留 192.0.2.10/192.0.2.11 或示例密码；密码缺失
+会使 sidecar 退出。.env 已被 Git 忽略，不要提交真实凭据。
+
+### 3.5 安装 Node.js 依赖
+
+    Set-Location '.\backend'; npm ci
+    Set-Location '..\frontend'; npm ci
+    Set-Location '..\desktop-app'; npm ci
+    Set-Location '..'
+
+可先构建前端：
+
+    Set-Location '.\frontend'; npm run build; Set-Location '..'
+
+### 3.6 首次运行 v2 Web 版
+
+首次运行建议手动开两个终端，以便看到 sidecar 报错。
+
+终端 A：
+
+    Set-Location 'E:\Yuntong_Project_v2\Yuntong_Project-master\backend'
+    npm run dev
+
+后端默认监听 8000，并自动使用 desktop-app\work\gpu-runtime\.venv\Scripts\python.exe
+启动 Python sidecar。终端 B：
+
+    Set-Location 'E:\Yuntong_Project_v2\Yuntong_Project-master\frontend'
+    npm run dev
+
+打开 <http://localhost:5173>，使用 `test / 904` 登录。确认两路预览正常后点击「开始检测」。首次检测可能在后台构建 TensorRT 引擎，缓存写入 `desktop-app/work/tensorrt`。模型就绪后，再检查检测框和三维定位。
+
+    Invoke-RestMethod 'http://localhost:8000/api/status' | ConvertTo-Json -Depth 8
+
+/api/status 在 sidecar 失败时也可能返回 HTTP 200，必须查看返回 JSON 的
+serviceState、error、cameras 和 engineState。
+
+完成一次手动验证后再使用一键启动：
+
+    Set-Location 'E:\Yuntong_Project_v2\Yuntong_Project-master'
+    .\一键启动.bat
+
+该脚本会清理 8000 端口、启动后端、等待 3 秒后启动前端；这 3 秒只是固定等待，
+不是 GPU 或 TensorRT 已就绪的判断，仍以 /api/status 的 serviceState 和 engineState
+为准。它不执行 npm ci、GPU setup、模型配置或 .env 配置，且必须从项目根目录运行。
+
+### 3.7 首次运行 Electron 桌面版（可选）
+
+桌面版不需要启动 backend 或 frontend，但仍需完成 GPU 虚拟环境、OpenCV 验证、
+摄像机 .env 和模型准备。先构建并启动：
+
+    Set-Location 'E:\Yuntong_Project_v2\Yuntong_Project-master\desktop-app'
+    npm run desktop:run
+
+`desktop:run` 会构建桌面界面并启动 Electron。桌面主进程使用项目 GPU 虚拟环境及 `desktop-app/models/drone.onnx`。Web 和 Electron 各自启动摄像机服务，请选择一种入口运行。需要安装包时，在运行验证通过后执行：
+
+    npm run desktop:dist
+
+安装包中的无人机模型位于 `resources/models/drone.onnx`。
+
+### 3.8 停止与故障排查
+
+- 手动启动的 Node、Vite、Electron 窗口分别按 Ctrl+C；Node 退出时会请求 sidecar 关闭。
+- EADDRINUSE 表示 8000 已占用。先确认 PID 再停止项目进程：
+
+      Get-NetTCPConnection -LocalPort 8000 -State Listen
+      Stop-Process -Id <PID>
+
+- ECONNREFUSED 先检查 backend 终端和 http://localhost:8000/api/status。
+- “Python 环境/摄像机桥接/drone ONNX 不存在”时检查 GPU venv、模型路径和
+  camera-rtsp-low-latency\.env，不要改用系统 Python。
+- TensorRT 或 cv2.cuda 失败时确认 Python 3.12.13 x64、CUDA 12.9、SM 8.9，以及
+  GPU venv 中没有 opencv-python wheel。
+- 401 通常是账号密码错误；超时检查 IP、RTSP 端口、VLAN 和 transport；连接拒绝
+  检查设备 RTSP 是否启用；无效流数据检查 CAMERA*_RTSP_PATH、通道和编码。
+- 一键脚本找不到目录时先 Set-Location 到 Yuntong_Project-master。
+
+运行前应同时满足：GPU verifier 通过、模型存在、两路摄像机 .env 已填写、三个
+Node 项目已 npm ci，且后端控制台没有 sidecar 启动错误。Python sidecar 只绑定
+127.0.0.1；Node 后端未显式限定监听地址，需通过防火墙或运行环境限制访问，不要
+把开发服务器或含密码的 .env 暴露到公网。

@@ -72,11 +72,18 @@ export function groupSpatialTracks(
 ): SpatialTrack[] {
   const tracks = new Map<string, SpatialTrack>();
   const unmatched: Record<CameraId, IndexedObject[]> = { camera1: [], camera2: [] };
+  const numberedTracks = Object.fromEntries(cameraIds.map((cameraId) => [
+    cameraId, new Set(objects[cameraId].map((object) => object.displayId).filter(Boolean)),
+  ]));
   for (const cameraId of cameraIds) {
     const side = cameraId === 'camera1' ? 'left' : 'right';
+    const otherCamera = cameraId === 'camera1' ? 'camera2' : 'camera1';
     objects[cameraId].forEach((object, index) => {
       const globalId = object.globalId?.trim();
-      const sharedIdentity = globalId?.startsWith('stereo:') ? globalId : undefined;
+      const displayId = object.displayId;
+      const sharedIdentity = displayId && numberedTracks[otherCamera].has(displayId)
+        ? 'label:' + displayId
+        : globalId?.startsWith('stereo:') ? globalId : undefined;
       if (!sharedIdentity) {
         unmatched[cameraId].push({ index, object });
         return;

@@ -7,6 +7,9 @@ contextBridge.exposeInMainWorld('yuntongCameraBridge', {
   getFrame(cameraId, afterSequence) {
     return ipcRenderer.invoke('camera:get-frame', { cameraId, afterSequence });
   },
+  getPreviewPair(afterSequences, epoch) {
+    return ipcRenderer.invoke('camera:get-preview-pair', { afterSequences, epoch });
+  },
   startDetection() {
     return ipcRenderer.invoke('camera:start-detection');
   },

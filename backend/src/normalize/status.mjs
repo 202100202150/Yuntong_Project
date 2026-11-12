@@ -1,3 +1,5 @@
+import { normalizeSpatial } from './spatial.mjs';
+
 const cameraIds = new Set(['camera1', 'camera2']);
 
 function finiteNumber(value) {
@@ -17,8 +19,8 @@ function nullableSignedFiniteNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
-function cameraPersonId(value) {
-  return typeof value === 'string' && /^person-\d{1,12}$/.test(value) ? value : null;
+function cameraTrackId(value) {
+  return typeof value === 'string' && /^track-\d{1,12}$/.test(value) ? value : null;
 }
 
 function boundedStatusString(value, fallback = 'unreported') {
@@ -61,7 +63,7 @@ export function normalizeStatus(payload) {
   const rawMatching = payload?.matchingDiagnostics && typeof payload.matchingDiagnostics === 'object'
     ? payload.matchingDiagnostics : {};
   const matchingReasons = new Set([
-    'waiting_for_frames', 'capture_time_gap', 'no_people',
+    'waiting_for_frames', 'capture_time_gap', 'no_targets',
     'low_similarity', 'ambiguous', 'confirming', 'partial_match', 'matched',
   ]);
   const matchingReason = boundedStatusString(rawMatching.reason, 'waiting_for_frames');
@@ -78,21 +80,20 @@ export function normalizeStatus(payload) {
         reason: item.reason,
         bestSimilarity: nullableFiniteNumber(item.bestSimilarity),
         secondSimilarity: nullableFiniteNumber(item.secondSimilarity),
-        camera1Id: cameraPersonId(item.camera1Id),
-        camera2Id: cameraPersonId(item.camera2Id),
+        camera1Id: cameraTrackId(item.camera1Id),
+        camera2Id: cameraTrackId(item.camera2Id),
         frameSkewMs: nullableFiniteNumber(item.frameSkewMs),
         ageMs: Math.floor(finiteNumber(item.ageMs)),
       }];
     }) : [];
 
   const matchingDiagnostics = {
-    algorithmVersion: matchingVersion === 'temporal-window-v2' || matchingVersion === 'temporal-geometry-v3'
-      ? matchingVersion : 'unreported',
+    algorithmVersion: matchingVersion === 'drone_stereo_center_v1' ? matchingVersion : 'unreported',
     reason: matchingReasons.has(matchingReason) ? matchingReason : 'waiting_for_frames',
     bestSimilarity: nullableFiniteNumber(rawMatching.bestSimilarity),
     secondSimilarity: nullableFiniteNumber(rawMatching.secondSimilarity),
-    camera1Id: cameraPersonId(rawMatching.camera1Id),
-    camera2Id: cameraPersonId(rawMatching.camera2Id),
+    camera1Id: cameraTrackId(rawMatching.camera1Id),
+    camera2Id: cameraTrackId(rawMatching.camera2Id),
     comparisonCount: Math.floor(finiteNumber(rawMatching.comparisonCount)),
     frameSkewMs: nullableFiniteNumber(rawMatching.frameSkewMs),
     offsetMs: nullableSignedFiniteNumber(rawMatching.offsetMs),
@@ -151,7 +152,7 @@ export function normalizeStatus(payload) {
       objects: Array.isArray(source.objects) ? source.objects.flatMap((item) => {
         const bbox = item?.bbox;
         const confidence = Number(item?.confidence);
-        if (!item || typeof item.id !== 'string' || item.class !== 'person' || !bbox) return [];
+        if (!item || typeof item.id !== 'string' || item.class !== 'drone' || !bbox) return [];
         const values = [bbox.x, bbox.y, bbox.width, bbox.height].map(Number);
         if (!values.every(Number.isFinite) || values[2] <= 0 || values[3] <= 0) return [];
         return [{
@@ -159,7 +160,10 @@ export function normalizeStatus(payload) {
           ...(typeof item.globalId === 'string' && item.globalId.trim()
             ? { globalId: item.globalId.slice(0, 160) }
             : {}),
-          class: 'person',
+          ...(typeof item.displayId === 'string' && /^drone(?:[1-9]\d{0,11})?$/.test(item.displayId)
+            ? { displayId: item.displayId }
+            : {}),
+          class: 'drone',
           confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
           bbox: { x: values[0], y: values[1], width: values[2], height: values[3] },
           frameSequence: finiteNumber(item.frameSequence ?? item.frame_sequence),
@@ -210,6 +214,7 @@ export function normalizeStatus(payload) {
       inference.engineState ?? inference.engine_state ?? payload?.engineState,
     ),
     matchingDiagnostics,
+    spatial: normalizeSpatial(payload?.spatial),
     cameras,
   };
 }

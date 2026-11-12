@@ -8,6 +8,7 @@ import { detectionRouter } from './routes/detection.mjs';
 import { recordingRouter } from './routes/recording.mjs';
 import { snapshotsRouter } from './routes/snapshots.mjs';
 import { devicesRouter } from './routes/devices.mjs'; // 👈 引入设备路由
+import { spatialRouter } from './routes/spatial.mjs';
 import { attachFrameStream } from './ws/frame-stream.mjs';
 import { startCameraBridge, stopCameraBridge } from './sidecar/client.mjs';
 
@@ -22,18 +23,27 @@ app.use('/api', detectionRouter);
 app.use('/api', recordingRouter);
 app.use('/api', snapshotsRouter);
 app.use('/api', devicesRouter); // 👈 注册设备路由
+app.use('/api', spatialRouter);
 
 const server = http.createServer(app);
-attachFrameStream(server);
 
 const PORT = Number(process.env.PORT ?? 8000);
 
-startCameraBridge().catch((err) => {
-  console.error('[backend] sidecar 启动失败:', err.message);
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[backend] 端口 ${PORT} 已被占用。请先关闭原有后端，再运行 npm run dev。`);
+  } else {
+    console.error('[backend] HTTP 服务启动失败:', err.message);
+  }
+  process.exitCode = 1;
 });
 
 server.listen(PORT, () => {
+  attachFrameStream(server);
   console.log(`[backend] http://localhost:${PORT}`);
+  startCameraBridge().catch((err) => {
+    console.error('[backend] sidecar 启动失败:', err.message);
+  });
 });
 
 const shutdown = async () => {

@@ -1,7 +1,7 @@
 <template>
   <div class="page-content">
     <div class="header-area">
-      <h2>云瞳 AIRSPACE · 校园低空安全监测平台</h2
+      <h2>云瞳 AIRSPACE · 校园低空安全监测平台</h2>
     </div>
 
     <div class="cards-container">

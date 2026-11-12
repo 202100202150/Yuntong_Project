@@ -5,7 +5,7 @@
       <div class="dc-camera-meta">
         <span>{{ displayFps }} FPS</span>
         <span>{{ inferenceLabel }}</span>
-        <span v-if="bridge.detecting && status.detectionCount > 0">{{ status.detectionCount }} person</span>
+        <span v-if="bridge.detecting && status.detectionCount > 0">{{ status.detectionCount }} 架无人机</span>
         <span :class="['dc-live-state', status.state]">{{ stateText }}</span>
       </div>
     </header>
@@ -24,7 +24,6 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { Video } from 'lucide-vue-next';
-import { cameraBridge } from '@/api/camera-bridge';
 import type { CameraBridgeStatus, CameraId, CameraRuntimeStatus } from '@/types/camera-types';
 
 const props = defineProps<{
@@ -35,7 +34,8 @@ const props = defineProps<{
 }>();
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
-const latestBitmap = ref<ImageBitmap | null>(null);
+let latestBitmap: ImageBitmap | null = null;
+let resizeObserver: ResizeObserver | undefined;
 
 const stateText = computed(() => {
   switch (props.status.state) {
@@ -55,49 +55,53 @@ const inferenceLabel = computed(() => {
   return 'GPU 状态未上报';
 });
 
-function drawFrame(bitmap: ImageBitmap) {
+function drawFrame() {
   const canvas = canvasRef.value;
   if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.max(1, Math.round(rect.width * dpr));
-  canvas.height = Math.max(1, Math.round(rect.height * dpr));
+  const pixelWidth = Math.max(1, Math.round(rect.width * dpr));
+  const pixelHeight = Math.max(1, Math.round(rect.height * dpr));
+  if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+  if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = '#0f1722';
   ctx.fillRect(0, 0, rect.width, rect.height);
+  const bitmap = latestBitmap;
+  if (!bitmap) return;
   const scale = Math.min(rect.width / bitmap.width, rect.height / bitmap.height);
   const w = bitmap.width * scale;
   const h = bitmap.height * scale;
   ctx.drawImage(bitmap, (rect.width - w) / 2, (rect.height - h) / 2, w, h);
 }
 
-let cancelled = false;
+function presentFrame(bitmap: ImageBitmap) {
+  latestBitmap?.close();
+  latestBitmap = bitmap;
+  drawFrame();
+}
+
+function clearFrame() {
+  latestBitmap?.close();
+  latestBitmap = null;
+  drawFrame();
+}
+
+defineExpose({ presentFrame, clearFrame });
+
 onMounted(() => {
-  let after = 0;
-  (async () => {
-    while (!cancelled) {
-      try {
-        const frame = await cameraBridge.getFrame(props.cameraId, after);
-        if (frame) {
-          after = frame.sequence;
-          const bitmap = await createImageBitmap(new Blob([frame.jpegBytes], { type: 'image/jpeg' }));
-          if (cancelled) { bitmap.close(); return; }
-          latestBitmap.value?.close();
-          latestBitmap.value = bitmap;
-          drawFrame(bitmap);
-        }
-      } catch {
-        await new Promise((r) => setTimeout(r, 150));
-      }
-    }
-  })();
+  if (canvasRef.value) {
+    resizeObserver = new ResizeObserver(drawFrame);
+    resizeObserver.observe(canvasRef.value);
+  }
 });
 
 onUnmounted(() => {
-  cancelled = true;
-  latestBitmap.value?.close();
-  latestBitmap.value = null;
+  resizeObserver?.disconnect();
+  latestBitmap?.close();
+  latestBitmap = null;
 });
 </script>

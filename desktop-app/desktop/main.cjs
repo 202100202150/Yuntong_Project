@@ -106,18 +106,10 @@ function resolveCameraProject() {
     ? path.resolve(configuredPython)
     : path.join(softwareRootPath, 'work', 'gpu-runtime', '.venv', 'Scripts', 'python.exe');
   const scriptPath = path.join(projectPath, 'camera_bridge.py');
-  // The Python sidecar cannot open a file inside Electron's asar archive.
-  // electron-builder unpacks the model below; use that real filesystem path
-  // for packaged builds while keeping the normal desktop-dist path in dev.
-  const bundledModelPath = path.join(rendererRootPath, 'models', 'person-v1.onnx');
-  const unpackedModelPath = path.join(
-    process.resourcesPath,
-    'app.asar.unpacked',
-    'desktop-dist',
-    'models',
-    'person-v1.onnx',
-  );
-  const modelPath = app.isPackaged ? unpackedModelPath : bundledModelPath;
+  // The Python sidecar needs a real file. electron-builder copies the model
+  // into resources/models for packaged builds.
+  const modelRoot = app.isPackaged ? process.resourcesPath : softwareRootPath;
+  const modelPath = path.join(modelRoot, 'models', 'drone.onnx');
   const configuredEngineCache = process.env.YUNTONG_TENSORRT_CACHE?.trim();
   const engineCachePath = configuredEngineCache
     ? path.resolve(configuredEngineCache)
@@ -127,7 +119,7 @@ function resolveCameraProject() {
   for (const [label, candidate] of [
     ['CUDA/TensorRT Python 环境', pythonPath],
     ['摄像机桥接程序', scriptPath],
-    ['person ONNX 模型', modelPath],
+    ['无人机 ONNX 模型', modelPath],
   ]) {
     if (!fs.existsSync(candidate)) throw new Error(`${label}不存在，请检查本机部署。`);
   }
@@ -163,7 +155,7 @@ function startCameraBridge() {
           env: {
             ...process.env,
             CAMERA_BRIDGE_TOKEN: token,
-            CAMERA_PERSON_MODEL: paths.modelPath,
+            CAMERA_DRONE_MODEL: paths.modelPath,
             CAMERA_TENSORRT_CACHE: paths.engineCachePath,
             PYTHONUNBUFFERED: '1',
           },
@@ -380,8 +372,32 @@ function nullableSignedFiniteNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
-function cameraPersonId(value) {
-  return typeof value === 'string' && /^person-\d{1,12}$/.test(value) ? value : null;
+function cameraTrackId(value) {
+  return typeof value === 'string' && /^track-\d{1,12}$/.test(value) ? value : null;
+}
+
+function normalizeSpatial(source) {
+  const states = ['uncalibrated', 'ready', 'waiting_for_frames', 'frame_time_gap', 'no_targets', 'no_valid_matches', 'error'];
+  const state = states.includes(source?.state) ? source.state : 'uncalibrated';
+  const cameras = Object.fromEntries(['camera1', 'camera2'].flatMap(id => {
+    const point = source?.cameras?.[id];
+    return point && [point.x, point.y, point.z].every(Number.isFinite)
+      ? [[id, { x: point.x, y: point.y, z: point.z }]] : [];
+  }));
+  const targets = state === 'ready' && Array.isArray(source.targets)
+    ? source.targets.slice(0, 256).flatMap(target => {
+      if (!target || target.class !== 'drone' || target.quality !== 'calibrated'
+        || typeof target.id !== 'string' || ![target.x, target.y, target.z].every(Number.isFinite)) return [];
+      return [{
+        id: target.id.slice(0, 160),
+        label: boundedStatusString(target.label, 'drone'),
+        x: target.x,
+        y: target.y,
+        z: target.z,
+        trackingState: target.trackingState === 'held' ? 'held' : 'measured',
+      }];
+    }) : [];
+  return { state, message: boundedStatusString(source?.message, '请先完成双摄标定。'), cameras, targets };
 }
 
 function boundedStatusString(value, fallback = 'unreported') {
@@ -406,7 +422,7 @@ function normalizeStatus(payload) {
     ? payload.matchingDiagnostics
     : {};
   const matchingReasons = new Set([
-    'waiting_for_frames', 'capture_time_gap', 'no_people',
+    'waiting_for_frames', 'capture_time_gap', 'no_targets',
     'low_similarity', 'ambiguous', 'confirming', 'partial_match', 'matched',
   ]);
   const matchingReason = boundedStatusString(rawMatching.reason, 'waiting_for_frames');
@@ -423,20 +439,19 @@ function normalizeStatus(payload) {
         reason: item.reason,
         bestSimilarity: nullableFiniteNumber(item.bestSimilarity),
         secondSimilarity: nullableFiniteNumber(item.secondSimilarity),
-        camera1Id: cameraPersonId(item.camera1Id),
-        camera2Id: cameraPersonId(item.camera2Id),
+        camera1Id: cameraTrackId(item.camera1Id),
+        camera2Id: cameraTrackId(item.camera2Id),
         frameSkewMs: nullableFiniteNumber(item.frameSkewMs),
         ageMs: Math.floor(finiteNumber(item.ageMs)),
       }];
     }) : [];
   const matchingDiagnostics = {
-    algorithmVersion: matchingVersion === 'temporal-window-v2' || matchingVersion === 'temporal-geometry-v3'
-      ? matchingVersion : 'unreported',
+    algorithmVersion: matchingVersion === 'drone_stereo_center_v1' ? matchingVersion : 'unreported',
     reason: matchingReasons.has(matchingReason) ? matchingReason : 'waiting_for_frames',
     bestSimilarity: nullableFiniteNumber(rawMatching.bestSimilarity),
     secondSimilarity: nullableFiniteNumber(rawMatching.secondSimilarity),
-    camera1Id: cameraPersonId(rawMatching.camera1Id),
-    camera2Id: cameraPersonId(rawMatching.camera2Id),
+    camera1Id: cameraTrackId(rawMatching.camera1Id),
+    camera2Id: cameraTrackId(rawMatching.camera2Id),
     comparisonCount: Math.floor(finiteNumber(rawMatching.comparisonCount)),
     frameSkewMs: nullableFiniteNumber(rawMatching.frameSkewMs),
     offsetMs: nullableSignedFiniteNumber(rawMatching.offsetMs),
@@ -503,7 +518,7 @@ function normalizeStatus(payload) {
       objects: Array.isArray(source.objects) ? source.objects.flatMap((item) => {
         const bbox = item?.bbox;
         const confidence = Number(item?.confidence);
-        if (!item || typeof item.id !== 'string' || item.class !== 'person' || !bbox) return [];
+        if (!item || typeof item.id !== 'string' || item.class !== 'drone' || !bbox) return [];
         const values = [bbox.x, bbox.y, bbox.width, bbox.height].map(Number);
         if (!values.every(Number.isFinite) || values[2] <= 0 || values[3] <= 0) return [];
         return [{
@@ -511,7 +526,10 @@ function normalizeStatus(payload) {
           ...(typeof item.globalId === 'string' && item.globalId.trim()
             ? { globalId: item.globalId.slice(0, 160) }
             : {}),
-          class: 'person',
+          ...(typeof item.displayId === 'string' && /^drone(?:[1-9]\d{0,11})?$/.test(item.displayId)
+            ? { displayId: item.displayId }
+            : {}),
+          class: 'drone',
           confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0,
           bbox: { x: values[0], y: values[1], width: values[2], height: values[3] },
           frameSequence: finiteNumber(item.frameSequence ?? item.frame_sequence),
@@ -575,6 +593,7 @@ function normalizeStatus(payload) {
         ?? payload?.engineState,
     ),
     matchingDiagnostics,
+    spatial: normalizeSpatial(payload?.spatial),
     cameras,
   };
 }
@@ -659,6 +678,45 @@ ipcMain.handle('camera:get-frame', async (event, input) => {
     height: numberHeader(response.headers, 'x-frame-height'),
     receivedAt: numberHeader(response.headers, 'x-frame-received-at', Date.now()),
     jpegBytes: new Uint8Array(response.data),
+  };
+});
+
+ipcMain.handle('camera:get-preview-pair', async (event, input) => {
+  requireTrustedRenderer(event);
+  const after1 = input?.afterSequences?.camera1;
+  const after2 = input?.afterSequences?.camera2;
+  const epoch = input?.epoch ?? '';
+  if (![after1, after2].every((value) => Number.isSafeInteger(value) && value >= 0)
+    || typeof epoch !== 'string' || (epoch && !/^[a-f0-9]{32}$/.test(epoch))) {
+    throw new Error('双路预览请求参数无效。');
+  }
+
+  const response = await requestCameraBridge('/v1/cameras/preview-pair', {
+    responseType: 'buffer',
+    timeoutMs: 2_000,
+    requestHeaders: {
+      'X-After-Camera1-Sequence': String(after1),
+      'X-After-Camera2-Sequence': String(after2),
+      'X-Wait-Milliseconds': '750',
+      ...(epoch ? { 'X-Preview-Epoch': epoch } : {}),
+    },
+  });
+  if (response.statusCode === 204 || !response.data) return null;
+
+  const pairEpoch = response.headers['x-preview-epoch'];
+  const length1 = numberHeader(response.headers, 'x-camera1-length');
+  const sequence1 = numberHeader(response.headers, 'x-camera1-sequence');
+  const sequence2 = numberHeader(response.headers, 'x-camera2-sequence');
+  if (typeof pairEpoch !== 'string' || !/^[a-f0-9]{32}$/.test(pairEpoch)
+    || ![length1, sequence1, sequence2].every((value) => Number.isSafeInteger(value) && value > 0)
+    || length1 >= response.data.length) {
+    throw new Error('摄像机服务返回了无效的双路预览。');
+  }
+  if (pairEpoch === epoch && (sequence1 <= after1 || sequence2 <= after2)) return null;
+  return {
+    epoch: pairEpoch,
+    camera1: { sequence: sequence1, jpegBytes: new Uint8Array(response.data.subarray(0, length1)) },
+    camera2: { sequence: sequence2, jpegBytes: new Uint8Array(response.data.subarray(length1)) },
   };
 });
 

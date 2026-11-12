@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "boardType": "aprilgrid",
+  "dictionary": "DICT_APRILTAG_36h11",
+  "markerBorderBits": 2,
+  "tagRows": 6,
+  "tagColumns": 6,
+  "tagSizeMeters": 0.055,
+  "tagSpacingMeters": 0.0165,
+  "idsTopToBottom": [
+    [30, 31, 32, 33, 34, 35],
+    [24, 25, 26, 27, 28, 29],
+    [18, 19, 20, 21, 22, 23],
+    [12, 13, 14, 15, 16, 17],
+    [6, 7, 8, 9, 10, 11],
+    [0, 1, 2, 3, 4, 5]
+  ],
+  "tagRotationDeg": 180,
+  "minCommonTags": 8
+}

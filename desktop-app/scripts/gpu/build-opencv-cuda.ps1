@@ -181,24 +181,11 @@ if ($vsInstances.Count -lt 1) {
     throw 'Visual Studio 2022 C++ x64 build tools are missing.'
 }
 
-# OpenCV probes the optional ASM language.  A MSYS2 `cc.exe` on PATH is not a
-# suitable assembler for a Visual Studio generator and makes CMake select the
-# Windows-GNU platform rules (which emit .a import libraries and -l/-L linker
-# flags).  Prefer the native MSVC x64 assembler; if it is not installed,
-# explicitly disable the optional probe rather than silently selecting MSYS2.
-$vsToolsRoot = Join-Path $vsInstances[0].installationPath 'VC\Tools\MSVC'
-$asmCandidates = @()
-if (Test-Path -LiteralPath $vsToolsRoot -PathType Container) {
-    $asmCandidates = @(Get-ChildItem -LiteralPath $vsToolsRoot -Recurse -File -Filter 'ml64.exe' -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match '\\bin\\Hostx64\\x64\\ml64\.exe$' } |
-        Sort-Object FullName -Descending)
-}
-$asmCompiler = if ($asmCandidates.Count -gt 0) {
-    $asmCandidates[0].FullName -replace '\\', '/'
-}
-else {
-    'NOTFOUND'
-}
+# OpenCV's optional DNN MLAS x86 kernels are GNU-style .S sources with GCC
+# flags; Visual Studio's ml64.exe cannot build those objects.  Leave the ASM
+# compiler unavailable so OpenCV DNN uses its portable CPU SGEMM fallback.
+# Drone detection runs through TensorRT independently of OpenCV DNN.
+$asmCompiler = 'NOTFOUND'
 
 # Prefer the CMake shipped with the selected Visual Studio instance.  An MSYS2
 # CMake earlier on PATH can parse Windows CUDA paths as escape sequences (for
@@ -299,10 +286,10 @@ $cmakeArguments = @(
     '-DCUDA_ARCH_BIN=8.9',
     '-DCUDA_ARCH_PTX=',
     "-DOPENCV_EXTRA_MODULES_PATH=$(Join-Path $contribSource 'modules')",
-    # The runtime detector uses TensorRT directly; cv2.dnn is not part of the
-    # production path.  Excluding it avoids OpenCV 5.0's vendored MLAS object
-    # library link issue on MSVC while keeping all CUDA preview modules.
-    '-DBUILD_LIST=core,imgproc,imgcodecs,highgui,videoio,video,python3,cudev,cudaarithm,cudaimgproc,cudawarping',
+    # Drone localization uses OpenCV's calibration APIs to undistort and
+    # triangulate the two detection centers. Keep the stereo module available
+    # for existing calibration tools.
+    '-DBUILD_LIST=core,imgproc,imgcodecs,highgui,videoio,video,python3,dnn,objdetect,calib,stereo,cudev,cudaarithm,cudaimgproc,cudawarping',
     '-DWITH_CUDA=ON',
     '-DWITH_CUBLAS=ON',
     '-DWITH_CUDNN=OFF',

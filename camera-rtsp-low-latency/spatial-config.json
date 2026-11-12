@@ -1,0 +1,161 @@
+{
+  "version": 1,
+  "units": "m",
+  "coordinateFrame": {
+    "mode": "stereo_midpoint",
+    "xAxis": "left",
+    "yAxis": "up",
+    "zAxis": "forward",
+    "description": "Origin is the midpoint of the two optical centres; C1 is right, C2 is left."
+  },
+  "rig": {
+    "midpoint": {
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    },
+    "baselineMeters": 5.077667306501671,
+    "baselineYawDeg": 0.0,
+    "geometrySource": "extrinsics",
+    "cameraPositions": {
+      "camera1": {
+        "x": 2.5388336532508355,
+        "y": 0.0,
+        "z": 0.0,
+        "side": "left",
+        "distanceToOriginMeters": 2.5388336532508355
+      },
+      "camera2": {
+        "x": -2.5388336532508355,
+        "y": 0.0,
+        "z": 0.0,
+        "side": "right",
+        "distanceToOriginMeters": 2.5388336532508355
+      }
+    }
+  },
+  "cameras": {
+    "camera1": {
+      "offset": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "yawDeg": 0.0,
+      "pitchDeg": 0.0,
+      "rollDeg": 0.0,
+      "intrinsics": {
+        "imageWidth": 3840,
+        "imageHeight": 2160,
+        "fx": 4230.506226272281,
+        "fy": 4230.59386828076,
+        "cx": 1944.0125110514746,
+        "cy": 1133.243868375043,
+        "distortion": [
+          -0.8219545659880607,
+          1.174535326362762,
+          -0.00025644678865822327,
+          0.0012213864834605605,
+          -0.9260596837984584
+        ],
+        "source": "calibrated:intrinsics_cam1.json"
+      }
+    },
+    "camera2": {
+      "offset": {
+        "x": 0.0,
+        "y": 0.0,
+        "z": 0.0
+      },
+      "yawDeg": 0.0,
+      "pitchDeg": 0.0,
+      "rollDeg": 0.0,
+      "intrinsics": {
+        "imageWidth": 3840,
+        "imageHeight": 2160,
+        "fx": 4225.600441218882,
+        "fy": 4228.029680351155,
+        "cx": 1912.1202311719505,
+        "cy": 1171.2871678996225,
+        "distortion": [
+          -0.7812603648554738,
+          1.0359012280751578,
+          -0.0027656805839269554,
+          0.0009539362459049397,
+          -0.7814192031469303
+        ],
+        "source": "calibrated:intrinsics_cam2.json"
+      }
+    }
+  },
+  "extrinsics": {
+    "enabled": true,
+    "commonFrame": "AprilGrid",
+    "camera1": {
+      "rotationCameraToBoard": [
+        [
+          -0.7335510557639408,
+          -0.004549644770311497,
+          -0.6796191207728576
+        ],
+        [
+          -0.008196503457752113,
+          0.9999640907838581,
+          0.002152782822250483
+        ],
+        [
+          0.6795849217858464,
+          0.007149676585461494,
+          -0.7335620056996193
+        ]
+      ],
+      "translationCameraInBoard": [
+        3.3416126049456114,
+        -0.9855535587463466,
+        2.524232419789307
+      ],
+      "source": "extrinsics.json"
+    },
+    "camera2": {
+      "rotationCameraToBoard": [
+        [
+          -0.9981528852817544,
+          -0.048122497670851534,
+          -0.03708156983769573
+        ],
+        [
+          -0.0426187346589079,
+          0.9896397928833935,
+          -0.13710114440728363
+        ],
+        [
+          0.043295046596378894,
+          -0.13526753327991212,
+          -0.9898627346155553
+        ]
+      ],
+      "translationCameraInBoard": [
+        -1.2701487199494534,
+        -0.1732592903921784,
+        4.487530863561169
+      ],
+      "source": "extrinsics.json"
+    }
+  },
+  "stereo": {
+    "processingScale": 0.32,
+    "minDisparity": 0.0,
+    "numDisparities": 128,
+    "blockSize": 5,
+    "minValidDepthPoints": 3,
+    "minDepthMeters": 0.2,
+    "maxDepthMeters": 100.0
+  },
+  "quality": {
+    "maxFrameSkewMs": 1000.0,
+    "maxReprojectionErrorPx": 50.0,
+    "minFeatureMatches": 3,
+    "maxRangeMeters": 100.0,
+    "minTriangulationAngleDeg": 0.01
+  }
+}

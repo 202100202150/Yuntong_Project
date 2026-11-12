@@ -1,17 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CameraDetectedObject, CameraId, CameraMatchingDiagnostics, CameraMatchingReason } from '@/lib/camera-types';
-import { groupSpatialTracks } from '@/lib/spatial-tracks';
+import { useEffect, useRef, useState } from 'react';
+import type { SpatialPoint, SpatialStatus, SpatialTarget } from '@/lib/camera-types';
 import { drawCampusBuildings, drawCampusBuildingsPlan } from '@/lib/campus-buildings';
 import './spatial-scene.css';
 
-type Point3 = { x: number; y: number; z: number };
+type Point3 = SpatialPoint;
 type SceneMode = '3d' | '2d';
 type SpatialSceneProps = {
-  objects: Record<CameraId, CameraDetectedObject[]>;
+  spatial?: SpatialStatus;
   detecting: boolean;
-  matchingDiagnostics: CameraMatchingDiagnostics;
 };
-const baseline = 3;
+type Motion<T> = { from: T; to: T; start: number };
+const transitionMs = 160;
+const progress = (motion: Motion<unknown>, now: number) => Math.max(0, Math.min(1, (now - motion.start) / transitionMs));
+const lerp = (a: number, b: number, ratio: number) => a + (b - a) * ratio;
+const emptyTargets: SpatialTarget[] = [];
+const emptyCameras: SpatialStatus['cameras'] = {};
 const INITIAL_YAW = -0.72;
 const INITIAL_PITCH = 0.56;
 const MIN_PITCH = -Math.PI / 2;
@@ -25,26 +28,10 @@ function clampPitch(pitch: number): number {
   return Math.max(MIN_PITCH, Math.min(MAX_PITCH, pitch));
 }
 
-const matchingReasonText: Record<CameraMatchingDiagnostics['reason'], string> = {
-  waiting_for_frames: '等待双路识别',
-  capture_time_gap: '两路帧时差过大',
-  no_people: '有一路未识别到人',
-  low_similarity: '匹配分数不足',
-  ambiguous: '候选不唯一',
-  confirming: '等待跨镜确认',
-  partial_match: '仅部分目标已配对',
-  matched: '已配对',
-};
-
-function triangulate(left?: CameraDetectedObject, right?: CameraDetectedObject): Point3 {
-  const leftU = left ? left.bbox.x + left.bbox.width / 2 : 0.5;
-  const rightU = right ? right.bbox.x + right.bbox.width / 2 : leftU;
-  const disparity = right && left ? rightU - leftU : 0;
-  const depth = disparity < -0.004 || disparity > 0.004 ? Math.min(16, Math.max(1.2, Math.abs(baseline / disparity) * 0.42)) : 5;
-  const x = ((leftU + rightU) / 2 - 0.5) * depth * 1.8;
-  const top = left?.bbox.y ?? right?.bbox.y ?? 0.5;
-  const height = left?.bbox.height ?? right?.bbox.height ?? 0.3;
-  return { x, y: Math.max(0.2, 2.6 - (top + height) * 3.1), z: depth };
+function pointAt(motion: Motion<Point3>, now: number): Point3 {
+  const { from, to } = motion;
+  const t = progress(motion, now);
+  return { x: lerp(from.x, to.x, t), y: lerp(from.y, to.y, t), z: lerp(from.z, to.z, t) };
 }
 
 function project(
@@ -54,6 +41,7 @@ function project(
   yaw: number,
   pitch: number,
   zoom: number,
+  extent: number,
   panX = 0,
   panY = 0,
 ) {
@@ -67,15 +55,13 @@ function project(
   // Keep scale independent of signed depth. Perspective division becomes
   // unstable when the camera is flipped through ±90° and points cross the
   // view plane; orthographic projection preserves the scene geometry.
-  const scale = Math.max(10, Math.min(width, height) * 0.075 * zoom);
-  return { x: width / 2 + x * scale + panX, y: height * 0.78 - y * scale + panY, depth };
+  const scale = Math.max(10, Math.min(width - 72, height - 136)) * 0.27 * zoom / extent;
+  return { x: width / 2 + x * scale + panX, y: height * 0.53 - y * scale + panY, depth };
 }
 
-function projectPlan(point: Point3, width: number, height: number, zoom: number, panX = 0, panY = 0) {
-  // Look from +Y toward -Y, with +X right and +Z down. Height does not
-  // affect the screen position. Leave room for the header and readout.
-  const scale = Math.max(10, Math.min(width - 64, height - 180) / 12 * zoom);
-  return { x: width / 2 + point.x * scale + panX, y: height / 2 - 14 + point.z * scale + panY, depth: point.y };
+function projectPlan(point: Point3, width: number, height: number, zoom: number, extent: number, panX = 0, panY = 0) {
+  const scale = Math.max(10, Math.min(width - 64, height - 180)) * zoom / (2 * extent);
+  return { x: width / 2 - point.x * scale + panX, y: height / 2 - 14 - point.z * scale + panY, depth: point.y };
 }
 
 function line(context: CanvasRenderingContext2D, a: ReturnType<typeof project>, b: ReturnType<typeof project>, color: string, width = 1) {
@@ -97,7 +83,7 @@ function arrow(context: CanvasRenderingContext2D, a: ReturnType<typeof project>,
   context.fillText(label, b.x + 7, b.y - 7);
 }
 
-export default function SpatialScene({ objects, detecting, matchingDiagnostics }: SpatialSceneProps) {
+export default function SpatialScene({ spatial, detecting }: SpatialSceneProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const dragRef = useRef<{
     x: number;
@@ -110,87 +96,56 @@ export default function SpatialScene({ objects, detecting, matchingDiagnostics }
   } | null>(null);
   const [sceneMode, setSceneMode] = useState<SceneMode>('3d');
   const [view, setView] = useState(initialView('3d'));
-  const tracks = useMemo(
-    () => groupSpatialTracks(objects).map((track) => ({
-      ...track,
-      point: triangulate(track.left, track.right),
-    })),
-    [objects],
-  );
-  const matchingVersion = matchingDiagnostics.algorithmVersion === 'temporal-geometry-v3'
-    ? 'v3' : matchingDiagnostics.algorithmVersion === 'temporal-window-v2'
-      ? 'v2' : '版本未上报';
-  const similarityDetail = matchingDiagnostics.bestSimilarity === null
-    ? '' : ` · 最高综合分 ${matchingDiagnostics.bestSimilarity.toFixed(2)}`
-      + (matchingDiagnostics.secondSimilarity === null
-        ? '' : ` / 次高 ${matchingDiagnostics.secondSimilarity.toFixed(2)}`);
-  const candidateDetail = matchingDiagnostics.camera1Id && matchingDiagnostics.camera2Id
-    ? ` · 候选 ${matchingDiagnostics.camera1Id} ↔ ${matchingDiagnostics.camera2Id}` : '';
-  const geometryDetail = matchingVersion === 'v3'
-    ? ` · 位置辅助${matchingDiagnostics.geometryStatus === 'ready' ? '已启用' : '未就绪'}` : '';
-  const blockingReasons: CameraMatchingReason[] = [
-    'capture_time_gap', 'low_similarity', 'ambiguous', 'no_people', 'partial_match',
-  ];
-  const dominantBlocker = blockingReasons
-    .map((reason) => ({ reason, count: matchingDiagnostics.reasonCounts[reason] ?? 0 }))
-    .sort((a, b) => b.count - a.count)[0];
-  const blockerDetail = dominantBlocker.count > 0
-    ? ` · 近30秒主要阻碍 ${matchingReasonText[dominantBlocker.reason]} ${dominantBlocker.count}次` : '';
-  const matchingDetail = detecting
-    ? `跨镜 ${matchingVersion}：${matchingReasonText[matchingDiagnostics.reason]}`
-      + similarityDetail + candidateDetail
-      + (matchingDiagnostics.frameSkewMs === null
-        ? '' : ` · 帧时差 ${matchingDiagnostics.frameSkewMs.toFixed(0)}ms`)
-      + geometryDetail + blockerDetail
-    : '';
-  const reasonCountsTitle = blockingReasons
-    .filter((reason) => (matchingDiagnostics.reasonCounts[reason] ?? 0) > 0)
-    .map((reason) => `${matchingReasonText[reason]} ${matchingDiagnostics.reasonCounts[reason]}次`)
-    .join('、') || '无';
-  const recentFailureTitle = matchingDiagnostics.recentFailures.length
-    ? matchingDiagnostics.recentFailures.map((failure, index) =>
-      `${index + 1}. ${matchingReasonText[failure.reason]}；综合分 ${failure.bestSimilarity?.toFixed(3) ?? '无'} / ${failure.secondSimilarity?.toFixed(3) ?? '无'}`
-      + `；候选 ${failure.camera1Id ?? '无'} ↔ ${failure.camera2Id ?? '无'}`
-      + `；帧时差 ${failure.frameSkewMs?.toFixed(0) ?? '无'}ms；${(failure.ageMs / 1000).toFixed(1)}秒前`,
-    ) : ['无'];
-  const matchingTitle = [
-    `算法 ${matchingDiagnostics.algorithmVersion}；${matchingReasonText[matchingDiagnostics.reason]}`,
-    `最高综合分：${matchingDiagnostics.bestSimilarity?.toFixed(3) ?? '无'}；次高综合分：${matchingDiagnostics.secondSimilarity?.toFixed(3) ?? '无'}`,
-    `候选：camera1/${matchingDiagnostics.camera1Id ?? '无'} ↔ camera2/${matchingDiagnostics.camera2Id ?? '无'}；比较次数：${matchingDiagnostics.comparisonCount}`,
-    `帧时差：${matchingDiagnostics.frameSkewMs?.toFixed(0) ?? '无'}ms；待确认：${matchingDiagnostics.pendingPairs}；已确认：${matchingDiagnostics.confirmedPairs}`,
-    `位置辅助：${matchingDiagnostics.geometryStatus === 'ready' ? '已启用' : '未就绪'}；可靠匹配点：${matchingDiagnostics.geometryInliers}`,
-    `近30秒各阻碍：${reasonCountsTitle}`,
-    '最近失败：',
-    ...recentFailureTitle,
-    '匹配不明确时两路目标分别显示；未做人脸识别或真实身高测量。',
-  ].join('\n');
+  const targets = detecting && spatial?.state === 'ready' ? spatial.targets : emptyTargets;
+  const cameras = spatial?.cameras ?? emptyCameras;
+  const motions = useRef(new Map<string, Motion<Point3>>());
+  const fit = useRef<Motion<number>>({ from: 6, to: 6, start: 0 });
 
   useEffect(() => {
     const canvas = canvasRef.current; if (!canvas) return undefined;
-    const draw = () => {
+    const started = performance.now();
+    motions.current = new Map(targets.map(target => {
+      const old = motions.current.get(target.id);
+      const unchanged = old && old.to.x === target.x && old.to.y === target.y && old.to.z === target.z;
+      return [target.id, unchanged ? old : {
+        from: old ? pointAt(old, started) : target, to: target, start: started,
+      }];
+    }));
+    const farthest = Math.max(6, ...[...Object.values(cameras), ...targets].map(point =>
+      Math.max(Math.abs(point.x), Math.abs(point.y), Math.abs(point.z))));
+    const desiredExtent = Math.ceil(farthest / 6) * 6;
+    if (desiredExtent > fit.current.to || (!detecting && desiredExtent !== fit.current.to)) {
+      const current = lerp(fit.current.from, fit.current.to, progress(fit.current, started));
+      fit.current = { from: current, to: desiredExtent, start: started };
+    }
+    const draw = (now: number) => {
       const rect = canvas.getBoundingClientRect(); const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const width = Math.max(1, Math.round(rect.width)); const height = Math.max(1, Math.round(rect.height));
-      canvas.width = width * dpr; canvas.height = height * dpr;
+      const pixelsWide = Math.round(width * dpr);
+      const pixelsHigh = Math.round(height * dpr);
+      if (canvas.width !== pixelsWide) canvas.width = pixelsWide;
+      if (canvas.height !== pixelsHigh) canvas.height = pixelsHigh;
       const context = canvas.getContext('2d'); if (!context) return;
       context.setTransform(dpr, 0, 0, dpr, 0, 0); context.clearRect(0, 0, width, height);
       const bg = context.createLinearGradient(0, 0, 0, height); bg.addColorStop(0, '#f5f8fb'); bg.addColorStop(1, '#e6edf4'); context.fillStyle = bg; context.fillRect(0, 0, width, height);
+      const extent = lerp(fit.current.from, fit.current.to, progress(fit.current, now));
       const p = (point: Point3) => sceneMode === '2d'
-        ? projectPlan(point, width, height, view.zoom, view.panX, view.panY)
-        : project(point, width, height, view.yaw, view.pitch, view.zoom, view.panX, view.panY);
+        ? projectPlan(point, width, height, view.zoom, extent, view.panX, view.panY)
+        : project(point, width, height, view.yaw, view.pitch, view.zoom, extent, view.panX, view.panY);
       const origin = p({ x: 0, y: 0, z: 0 });
       // Ground grid keeps the full signed X/Z range.
-      const extent = 6;
-      for (let i = -extent; i <= extent; i += 1) {
+      const step = Math.max(1, Math.round(extent / 6));
+      for (let i = -6 * step; i <= 6 * step; i += step) {
         line(context, p({ x: i, y: 0, z: -extent }), p({ x: i, y: 0, z: extent }), i === 0 ? '#9eb4c8' : '#d0dbe5');
         line(context, p({ x: -extent, y: 0, z: i }), p({ x: extent, y: 0, z: i }), i === 0 ? '#9eb4c8' : '#d0dbe5');
       }
       if (sceneMode === '3d') {
         // Vertical reference planes extend only above the ground (Y >= 0).
-        for (let level = 0; level <= extent; level += 1) {
+        for (let level = 0; level <= extent; level += step) {
           line(context, p({ x: 0, y: level, z: -extent }), p({ x: 0, y: level, z: extent }), level === 0 ? '#a9becf' : '#d6e0e8');
           line(context, p({ x: -extent, y: level, z: 0 }), p({ x: extent, y: level, z: 0 }), level === 0 ? '#b0c3d2' : '#dce5ec');
         }
-        for (let coordinate = -extent; coordinate <= extent; coordinate += 1) {
+        for (let coordinate = -6 * step; coordinate <= 6 * step; coordinate += step) {
           line(context, p({ x: 0, y: 0, z: coordinate }), p({ x: 0, y: extent, z: coordinate }), coordinate === 0 ? '#a9becf' : '#d6e0e8');
           line(context, p({ x: coordinate, y: 0, z: 0 }), p({ x: coordinate, y: extent, z: 0 }), coordinate === 0 ? '#b0c3d2' : '#dce5ec');
         }
@@ -202,23 +157,68 @@ export default function SpatialScene({ objects, detecting, matchingDiagnostics }
       // Fixed world axes. They remain tied to the scene origin while the camera view rotates.
       context.fillStyle = '#40566d'; context.font = '800 11px Inter, sans-serif';
       context.fillText('O', origin.x + 7, origin.y + 14);
-      arrow(context, origin, p({ x: 3, y: 0, z: 0 }), '#d24f55', 'X');
-      if (sceneMode === '3d') arrow(context, origin, p({ x: 0, y: 3, z: 0 }), '#3b9a69', 'Y');
-      arrow(context, origin, p({ x: 0, y: 0, z: 4 }), '#3979b8', 'Z');
+      arrow(context, origin, p({ x: extent / 2, y: 0, z: 0 }), '#d24f55', 'X');
+      if (sceneMode === '3d') arrow(context, origin, p({ x: 0, y: extent / 2, z: 0 }), '#3b9a69', 'Y');
+      arrow(context, origin, p({ x: 0, y: 0, z: extent * 2 / 3 }), '#3979b8', 'Z');
       context.fillStyle = '#6d8195'; context.font = '600 9px Inter, sans-serif';
-      for (let x = 1; x <= 5; x += 1) { const tick = p({ x, y: 0, z: 0 }); context.fillText(String(x), tick.x + 3, tick.y + 13); }
-      for (let z = 1; z <= (sceneMode === '2d' ? extent : 10); z += 1) { const tick = p({ x: 0, y: 0, z }); context.fillText(String(z), tick.x + 4, tick.y + 3); }
+      for (let x = step; x <= extent; x += step) { const tick = p({ x, y: 0, z: 0 }); context.fillText(String(x), tick.x + 3, tick.y + 13); }
+      for (let z = step; z <= extent; z += step) { const tick = p({ x: 0, y: 0, z }); context.fillText(String(z), tick.x + 4, tick.y + 3); }
       if (sceneMode === '3d') {
-        for (let y = 1; y <= extent; y += 1) {
+        for (let y = step; y <= extent; y += step) {
           const tick = p({ x: 0, y, z: 0 });
           context.fillText(String(y), tick.x + 5, tick.y - 3);
         }
       }
-      for (const camera of [{ point: { x: -1.5, y: 1.8, z: 0 }, label: 'C1', color: '#3979b8' }, { point: { x: 1.5, y: 1.8, z: 0 }, label: 'C2', color: '#c27a36' }]) { const projected = p(camera.point); context.fillStyle = camera.color; context.beginPath(); context.arc(projected.x, projected.y, 5, 0, Math.PI * 2); context.fill(); context.font = '700 10px Inter, sans-serif'; context.fillText(camera.label, projected.x + 8, projected.y - 6); }
-      for (const track of tracks) { const projected = p(track.point); const color = track.left && track.right ? '#1d9b72' : '#8b98a7'; line(context, origin, projected, color + '66'); context.fillStyle = color; context.shadowColor = color + '99'; context.shadowBlur = 12; context.beginPath(); context.arc(projected.x, projected.y, 7, 0, Math.PI * 2); context.fill(); context.shadowBlur = 0; context.fillStyle = '#24364c'; context.font = '700 10px Inter, sans-serif'; const coordinates = sceneMode === '2d' ? track.point.x.toFixed(1) + ', ' + track.point.z.toFixed(1) : track.point.x.toFixed(1) + ', ' + track.point.y.toFixed(1) + ', ' + track.point.z.toFixed(1); context.fillText(track.id + '  (' + coordinates + 'm)', projected.x + 11, projected.y - 7); }
+      for (const [id, point] of Object.entries(cameras)) {
+        const projected = p(point);
+        context.fillStyle = id === 'camera1' ? '#3979b8' : '#c27a36';
+        context.beginPath();
+        context.arc(projected.x, projected.y, 5, 0, Math.PI * 2);
+        context.fill();
+        context.font = '700 10px Inter, sans-serif';
+        context.fillText(id === 'camera1' ? 'C1' : 'C2', projected.x + 8, projected.y - 6);
+      }
+      for (const target of targets) {
+        const motion = motions.current.get(target.id);
+        const { x, y, z } = motion ? pointAt(motion, now) : target;
+        const projected = p({ x, y, z });
+        const held = target.trackingState === 'held';
+        const color = held ? '#8b98a7' : '#1d9b72';
+        line(context, origin, projected, color + '66');
+        context.fillStyle = color;
+        context.shadowColor = color + '99';
+        context.shadowBlur = 12;
+        context.beginPath();
+        context.arc(projected.x, projected.y, 7, 0, Math.PI * 2);
+        context.fill();
+        context.shadowBlur = 0;
+        context.fillStyle = '#24364c';
+        context.font = '700 10px Inter, sans-serif';
+        const azimuth = Math.atan2(x, z) * 180 / Math.PI;
+        const elevation = Math.atan2(y, Math.hypot(x, z)) * 180 / Math.PI;
+        const name = `${target.label}${held ? '（短时保持）' : ''}  (${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)}) m`;
+        const detail = `距离 ≈ ${Math.hypot(x, y, z).toFixed(1)} m · 方位 ${azimuth.toFixed(1)}° · 仰角 ${elevation.toFixed(1)}°`;
+        const textWidth = Math.max(context.measureText(name).width, context.measureText(detail).width);
+        const textX = Math.max(8, Math.min(projected.x + 10, width - textWidth - 8));
+        context.fillText(name, textX, projected.y - 8);
+        context.fillText(detail, textX, projected.y + 5);
+      }
     };
-    draw(); const observer = new ResizeObserver(draw); observer.observe(canvas); return () => observer.disconnect();
-  }, [tracks, view, sceneMode]);
+    let animation = 0;
+    const render = (now: number) => {
+      draw(now);
+      if (progress(fit.current, now) < 1 || [...motions.current.values()].some(motion => progress(motion, now) < 1)) {
+        animation = requestAnimationFrame(render);
+      }
+    };
+    animation = requestAnimationFrame(render);
+    const observer = new ResizeObserver(() => draw(performance.now()));
+    observer.observe(canvas);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(animation);
+    };
+  }, [cameras, detecting, targets, view, sceneMode]);
 
   const pointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     event.preventDefault();
@@ -282,15 +282,9 @@ export default function SpatialScene({ objects, detecting, matchingDiagnostics }
       <button type="button" aria-pressed={sceneMode === '2d'} onClick={() => switchMode('2d')}>2D</button>
     </fieldset>
     <div className="spatial-scene-hint">{sceneMode === '2d' ? '拖动平移 · 滚轮缩放' : '左键旋转 · 左右键拖动平移 · 滚轮缩放'}</div><button type="button" className="spatial-reset" onClick={reset}>重置视角</button>
-    <div className="spatial-scene-legend"><span><i className="axis-x" /> X 右</span>{sceneMode === '3d' && <span><i className="axis-y" /> Y 上</span>}<span><i className="axis-z" /> {sceneMode === '2d' ? 'Z 下' : 'Z 深'}</span><span><i className="target" /> person</span></div>
-    <div
-      className="spatial-scene-readout"
-      title={matchingTitle}
-    >
-      {tracks.length
-        ? tracks.length + ' 个目标 · 双目匹配 ' + tracks.filter((track) => track.left && track.right).length
-        : '等待双摄检测目标…'}
-      {matchingDetail && <span className="spatial-matching-detail">{matchingDetail}</span>}
+    <div className="spatial-scene-legend"><span><i className="axis-x" /> X 左</span>{sceneMode === '3d' && <span><i className="axis-y" /> Y 上</span>}<span><i className="axis-z" /> Z 前</span><span><i className="target" /> 无人机</span></div>
+    <div className="spatial-scene-readout">
+      {detecting ? spatial?.message || '等待双路无人机检测…' : '等待启动无人机检测。'}
     </div>
   </div>;
 }

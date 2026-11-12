@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requestCameraBridge, startCameraBridge } from '../sidecar/client.mjs';
 import { normalizeStatus, emptyCameraStatus } from '../normalize/status.mjs';
+import { normalizeSpatial } from '../normalize/spatial.mjs';
 
 export const statusRouter = Router();
 
@@ -15,6 +16,7 @@ statusRouter.get('/status', async (req, res) => {
       error: err.message,
       recording: false,
       detecting: false,
+      spatial: { ...normalizeSpatial(null), state: 'error', message: err.message },
       inferenceProvider: 'unreported',
       precision: 'unreported',
       previewProcessor: 'unreported',

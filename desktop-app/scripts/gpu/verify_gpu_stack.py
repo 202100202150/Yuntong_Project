@@ -137,6 +137,23 @@ def _check_opencv(expected_install_root: Path) -> dict[str, Any]:
     if not str(cv2.__version__).startswith("5.0.0"):
         raise VerificationError(f"OpenCV 5.0.0 is required; imported {cv2.__version__}.")
 
+    required_stereo_api = (
+        "undistortPoints",
+        "projectPoints",
+        "triangulatePoints",
+        "stereoRectify",
+        "initUndistortRectifyMap",
+        "StereoSGBM_create",
+        "STEREO_SGBM_MODE_SGBM_3WAY",
+        "reprojectImageTo3D",
+    )
+    missing_stereo_api = [name for name in required_stereo_api if not hasattr(cv2, name)]
+    if missing_stereo_api:
+        raise VerificationError(
+            "OpenCV calibration/stereo module is incomplete; missing: "
+            + ", ".join(missing_stereo_api)
+        )
+
     cv2_path = Path(cv2.__file__).resolve()
     if not _inside(cv2_path, expected_install_root):
         raise VerificationError(
@@ -190,6 +207,7 @@ def _check_opencv(expected_install_root: Path) -> dict[str, Any]:
         "cudaDevices": device_count,
         "cudaBuild": cuda_line.group(0).strip(),
         "cudaArch": architecture_line.group(1).strip(),
+        "spatialMethod": "drone_box_center_triangulation",
         "resizeSmoke": {"shape": list(downloaded.shape), "meanError": round(mean_error, 6)},
     }
 

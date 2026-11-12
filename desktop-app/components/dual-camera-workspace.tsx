@@ -15,7 +15,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   cameraIds,
   type CameraBridgeStatus,
@@ -27,6 +27,7 @@ import './dual-camera-workspace.css';
 import SpatialScene from './spatial-scene';
 
 type RunState = 'idle' | 'starting' | 'running' | 'paused';
+type PreviewMode = 'pair' | CameraId | null;
 type Toast = { id: number; message: string; tone: 'info' | 'success' | 'error' };
 
 const emptyCameraStatus = (id: CameraId): CameraRuntimeStatus => ({
@@ -84,6 +85,9 @@ const emptyBridgeStatus = (): CameraBridgeStatus => ({
 
 const delay = (milliseconds: number) =>
   new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+
+const hasLiveFrame = (status: CameraRuntimeStatus) =>
+  status.state === 'streaming' && status.frameAvailable;
 
 const cameraStateText = (status: CameraRuntimeStatus) => {
   if (status.state === 'streaming') return 'LIVE';
@@ -176,6 +180,22 @@ export default function DualCameraWorkspace() {
   const displayedFramesRef = useRef<Record<CameraId, Array<{ sequence: number; at: number }>>>(
     { camera1: [], camera2: [] },
   );
+  const previewModeRef = useRef<PreviewMode>(null);
+  const live1 = hasLiveFrame(bridgeStatus.cameras.camera1);
+  const live2 = hasLiveFrame(bridgeStatus.cameras.camera2);
+  const previewMode: PreviewMode = live1 && live2 ? 'pair' : live1 ? 'camera1' : live2 ? 'camera2' : null;
+
+  useLayoutEffect(() => {
+    previewModeRef.current = previewMode;
+    for (const cameraId of cameraIds) {
+      if (previewMode === 'pair' || previewMode === cameraId) continue;
+      latestBitmapRef.current[cameraId]?.close();
+      latestBitmapRef.current[cameraId] = null;
+      latestSequenceRef.current[cameraId] = 0;
+      displayedFramesRef.current[cameraId].length = 0;
+      clearCanvas(canvasRefs.current[cameraId]);
+    }
+  }, [previewMode]);
 
   const toast = useCallback((message: string, tone: Toast['tone'] = 'info') => {
     const id = Date.now() + Math.random();
@@ -240,34 +260,69 @@ export default function DualCameraWorkspace() {
     const bitmaps = latestBitmapRef.current;
     const displayedFrames = displayedFramesRef.current;
 
-    const decodeAndDraw = async (frame: CameraFrame) => {
+    const decodeFrame = (frame: Pick<CameraFrame, 'jpegBytes'>) => {
       const bytes = new Uint8Array(frame.jpegBytes);
-      const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
-      if (cancelled) {
-        bitmap.close();
-        return;
-      }
-      const previous = bitmaps[frame.cameraId];
-      bitmaps[frame.cameraId] = bitmap;
+      return createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
+    };
+
+    const showFrame = (cameraId: CameraId, frame: Pick<CameraFrame, 'sequence'>, bitmap: ImageBitmap, now: number) => {
+      const previous = bitmaps[cameraId];
+      bitmaps[cameraId] = bitmap;
       previous?.close();
-      const canvas = canvasRefs.current[frame.cameraId];
+      latestSequenceRef.current[cameraId] = frame.sequence;
+      const canvas = canvasRefs.current[cameraId];
       if (canvas) drawFrame(canvas, bitmap);
-      const frames = displayedFrames[frame.cameraId];
-      const now = performance.now();
+      const frames = displayedFrames[cameraId];
       if (!frames.length || frames[frames.length - 1].sequence !== frame.sequence) {
         frames.push({ sequence: frame.sequence, at: now });
       }
       while (frames.length && frames[0].at < now - 1_000) frames.shift();
     };
 
-    const pollFrames = async (cameraId: CameraId) => {
+    const canDisplay = (mode: PreviewMode) =>
+      !cancelled && !document.hidden && previewModeRef.current === mode;
+
+    const pollPreview = async () => {
+      let epoch = '';
       while (!cancelled) {
+        const mode = previewModeRef.current;
+        if (mode === null || document.hidden) {
+          await delay(100);
+          continue;
+        }
         try {
-          const frame = await bridge.getFrame(cameraId, latestSequenceRef.current[cameraId]);
-          if (frame) {
-            latestSequenceRef.current[cameraId] = frame.sequence;
-            await decodeAndDraw(frame);
+          if (mode === 'pair') {
+            const cursors = epoch ? { ...latestSequenceRef.current } : { camera1: 0, camera2: 0 };
+            const pair = await bridge.getPreviewPair(cursors, epoch);
+            if (!pair || !canDisplay(mode)) continue;
+            const [first, second] = await Promise.allSettled([
+              decodeFrame(pair.camera1),
+              decodeFrame(pair.camera2),
+            ]);
+            if (first.status !== 'fulfilled' || second.status !== 'fulfilled' || !canDisplay(mode)) {
+              if (first.status === 'fulfilled') first.value.close();
+              if (second.status === 'fulfilled') second.value.close();
+              if (first.status === 'rejected' || second.status === 'rejected') await delay(120);
+              continue;
+            }
+            if (epoch !== pair.epoch) {
+              epoch = pair.epoch;
+              for (const cameraId of cameraIds) displayedFrames[cameraId].length = 0;
+            }
+            // No await between these draws. The browser paints both decoded
+            // frames together, then the loop asks for the next pair.
+            const now = performance.now();
+            showFrame('camera1', pair.camera1, first.value, now);
+            showFrame('camera2', pair.camera2, second.value, now);
+            continue;
           }
+
+          const cameraId = mode;
+          const frame = await bridge.getFrame(cameraId, latestSequenceRef.current[cameraId]);
+          if (!frame || !canDisplay(mode)) continue;
+          const bitmap = await decodeFrame(frame);
+          if (canDisplay(mode)) showFrame(cameraId, frame, bitmap, performance.now());
+          else bitmap.close();
         } catch {
           // The status poll owns user-facing errors; frame polling retries without
           // producing a toast storm during normal RTSP reconnects.
@@ -287,8 +342,7 @@ export default function DualCameraWorkspace() {
       setDisplayFps(next);
     }, 250);
 
-    void pollFrames('camera1');
-    void pollFrames('camera2');
+    void pollPreview();
     return () => {
       cancelled = true;
       window.clearInterval(fpsTimer);
@@ -367,7 +421,7 @@ export default function DualCameraWorkspace() {
       setBridgeStatus((current) => ({ ...current, recording: result.recording }));
       toast(
         result.recording
-          ? '两路摄像机已请求开始带 person 检测框录像。'
+          ? '两路摄像机已请求开始带无人机检测框录像。'
           : '两路带框录像已停止并正在完成文件索引。',
         result.recording ? 'success' : 'info',
       );
@@ -455,12 +509,8 @@ export default function DualCameraWorkspace() {
 
         <section className="dc-stage" aria-label="实时三维空间建模视图">
           <SpatialScene
-            objects={{
-              camera1: bridgeStatus.cameras.camera1.objects,
-              camera2: bridgeStatus.cameras.camera2.objects,
-            }}
+            spatial={bridgeStatus.spatial}
             detecting={bridgeStatus.detecting}
-            matchingDiagnostics={bridgeStatus.matchingDiagnostics}
           />
           <div className="dc-stage-controls">
             <button type="button" disabled aria-label="缩小暂未启用"><ZoomOut /></button>
@@ -504,7 +554,7 @@ export default function DualCameraWorkspace() {
                       {inferenceLabel(bridgeStatus)}
                     </span>
                     {bridgeStatus.detecting && status.detectionCount > 0 && (
-                      <span>{status.detectionCount} person</span>
+                      <span>{status.detectionCount} 架无人机</span>
                     )}
                     <span className={`dc-live-state ${status.state}`}>{stateText}</span>
                   </div>
@@ -514,7 +564,7 @@ export default function DualCameraWorkspace() {
                     ref={(element) => { canvasRefs.current[cameraId] = element; }}
                     aria-label={`${cameraId} 实时检测画面`}
                   />
-                  {!status.frameAvailable && (
+                  {!hasLiveFrame(status) && (
                     <div className="dc-camera-placeholder">
                       {status.state === 'error' || bridgeStatus.serviceState === 'error'
                         ? <WifiOff />

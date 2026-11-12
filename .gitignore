@@ -86,3 +86,9 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# 本地工作目录和独立移交项目
+/work/
+/desktop-app/work/
+/cudart64_12.dll
+/云瞳AIRSPACE_UAVGuard_AI开发移交_2026-09-04/

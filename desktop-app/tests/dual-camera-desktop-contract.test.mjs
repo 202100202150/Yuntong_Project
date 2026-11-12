@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const read = (relativePath) => readFileSync(path.join(root, relativePath), 'utf8');
@@ -56,15 +58,74 @@ test('renderer bridge never receives credentials, loopback details, ports, or lo
   assert.doesNotMatch(main, /\{\s*path:\s*item\.path\s*\}/);
 });
 
-test('preview transport uses one long-polling request per camera without an 80ms frame cap', () => {
+test('dual preview uses one paired poll and paints both decoded frames together', () => {
   const workspace = read('components/dual-camera-workspace.tsx');
-  const main = read('desktop/main.cjs');
+  const preload = read('desktop/preload.cjs');
 
-  assert.match(main, /'X-After-Frame-Sequence':\s*String\(afterSequence\)/);
-  assert.match(main, /'X-Wait-Milliseconds':\s*'750'/);
-  assert.doesNotMatch(workspace, /80\s*-\s*\(performance\.now\(\)\s*-\s*startedAt\)/);
+  assert.match(preload, /ipcRenderer\.invoke\('camera:get-preview-pair'/);
+  assert.match(workspace, /await bridge\.getPreviewPair\(cursors, epoch\)/);
+  assert.match(workspace, /Promise\.allSettled\(\[\s*decodeFrame\(pair\.camera1\),\s*decodeFrame\(pair\.camera2\),\s*\]\)/);
+  assert.match(workspace, /showFrame\('camera1', pair\.camera1, first\.value, now\);\s*showFrame\('camera2', pair\.camera2, second\.value, now\)/);
   assert.match(workspace, /await bridge\.getFrame\(cameraId, latestSequenceRef\.current\[cameraId\]\)/);
-  assert.match(workspace, /await delay\(120\)/);
+  assert.match(workspace, /status\.state === 'streaming' && status\.frameAvailable/);
+});
+
+test('paired preview IPC returns both JPEGs, handles no pair, and accepts restarted sequences', async () => {
+  const handlers = new Map();
+  const requests = [];
+  const require = createRequire(import.meta.url);
+  const mockElectron = {
+    app: { requestSingleInstanceLock: () => false, quit() {} },
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    protocol: { registerSchemesAsPrivileged() {} },
+  };
+  let response;
+  runInNewContext(read('desktop/main.cjs') + '\nrequestCameraBridge = mockRequest;', {
+    __dirname: path.join(root, 'desktop'),
+    require: (id) => id === 'electron' ? mockElectron : require(id),
+    mockRequest: (pathname, options) => {
+      requests.push([pathname, options]);
+      return Promise.resolve(response);
+    },
+  });
+
+  const handler = handlers.get('camera:get-preview-pair');
+  const senderFrame = { url: 'app://bundle/index.html' };
+  const event = { senderFrame, sender: { mainFrame: senderFrame } };
+  const input = { afterSequences: { camera1: 101, camera2: 151 }, epoch: 'a'.repeat(32) };
+  const fresh = {
+    statusCode: 200,
+    headers: {
+      'x-preview-epoch': 'b'.repeat(32),
+      'x-camera1-length': '3',
+      'x-camera1-sequence': '2',
+      'x-camera2-sequence': '3',
+    },
+    data: Buffer.from([1, 2, 3, 4, 5]),
+  };
+
+  response = { statusCode: 204 };
+  assert.equal(await handler(event, input), null);
+  assert.equal(requests[0][0], '/v1/cameras/preview-pair');
+  assert.deepEqual({ ...requests[0][1].requestHeaders }, {
+    'X-After-Camera1-Sequence': '101',
+    'X-After-Camera2-Sequence': '151',
+    'X-Wait-Milliseconds': '750',
+    'X-Preview-Epoch': input.epoch,
+  });
+  response = fresh;
+  const pair = await handler(event, input);
+  assert.equal(pair.epoch, 'b'.repeat(32));
+  assert.equal(pair.camera1.sequence, 2);
+  assert.equal(pair.camera2.sequence, 3);
+  assert.deepEqual([...pair.camera1.jpegBytes], [1, 2, 3]);
+  assert.deepEqual([...pair.camera2.jpegBytes], [4, 5]);
+
+  response = { ...fresh, headers: { ...fresh.headers, 'x-preview-epoch': input.epoch } };
+  assert.equal(await handler(event, input), null);
+  response = { ...fresh, headers: { ...fresh.headers, 'x-camera1-length': '5' } };
+  await assert.rejects(handler(event, input), /无效的双路预览/);
+  await assert.rejects(handler({ ...event, sender: {} }, input), /拒绝非本地页面/);
 });
 
 test('desktop sidecar uses a 30 FPS CUDA-friendly preview profile', () => {
@@ -119,33 +180,39 @@ test('renderer reports measured unique display FPS and explicit inference backen
   }
 });
 
-test('cross-camera identity flows from the bridge through Electron into the 3D scene', () => {
-  const bridge = read('../camera-rtsp-low-latency/camera_bridge.py');
+test('desktop scene receives measured spatial targets from the camera bridge', () => {
   const main = read('desktop/main.cjs');
+  const workspace = read('components/dual-camera-workspace.tsx');
   const spatialScene = read('components/spatial-scene.tsx');
 
-  assert.match(bridge, /"globalId": global_identity\(key, detected\.object_id\)/);
   assert.match(main, /typeof item\.globalId === 'string'[\s\S]*globalId: item\.globalId/);
-  assert.match(spatialScene, /groupSpatialTracks\(objects\)/);
+  assert.match(main, /spatial: normalizeSpatial\(payload\?\.spatial\)/);
+  assert.match(workspace, /spatial=\{bridgeStatus\.spatial\}/);
+  assert.match(spatialScene, /spatial\.targets/);
+  assert.doesNotMatch(spatialScene, /triangulate|groupSpatialTracks/);
 });
 
-test('matching diagnostics expose both scores and safe candidate IDs in the 3D scene', () => {
-  const main = read('desktop/main.cjs');
-  const cameraTypes = read('lib/camera-types.ts');
-  const spatialScene = read('components/spatial-scene.tsx');
+test('Electron IPC preserves a calibrated drone and cannot derive a position from a preview box', () => {
+  const require = createRequire(import.meta.url);
+  const mockElectron = {
+    app: { requestSingleInstanceLock: () => false, quit() {} },
+    ipcMain: { handle() {} },
+    protocol: { registerSchemesAsPrivileged() {} },
+  };
+  const target = { id: 'drone1', class: 'drone', quality: 'calibrated', label: 'drone1',
+    trackingState: 'held', x: -1.2, y: 1.7, z: 4 };
+  const payload = { cameras: { camera1: { objects: [{
+    id: 'track-1', class: 'drone', displayId: 'drone1', bbox: { x: 0.2, y: 0.4, width: 0.04, height: 0.02 },
+  }] } }, spatial: { state: 'ready', targets: [target] } };
 
-  for (const field of [
-    'secondSimilarity', 'camera1Id', 'camera2Id', 'comparisonCount',
-    'offsetMs', 'geometryStatus', 'geometryInliers', 'reasonCounts', 'recentFailures',
-  ]) {
-    assert.match(main, new RegExp(`\\b${field}\\b`));
-    assert.match(cameraTypes, new RegExp(`\\b${field}\\b`));
-  }
-  assert.match(main, /\^person-\\d\{1,12\}\$/);
-  assert.match(spatialScene, /最高/);
-  assert.match(spatialScene, /次高/);
-  assert.match(spatialScene, /位置辅助/);
-  assert.match(spatialScene, /temporal-geometry-v3/);
-  assert.match(spatialScene, /近30秒主要阻碍/);
-  assert.match(spatialScene, /最近失败/);
+  const normalize = runInNewContext(read('desktop/main.cjs') + '\nnormalizeStatus;', {
+    __dirname: path.join(root, 'desktop'),
+    require: (id) => id === 'electron' ? mockElectron : require(id),
+  });
+  const result = normalize(payload);
+  assert.equal(result.cameras.camera1.objects[0].displayId, 'drone1');
+  assert.equal(result.spatial.targets.length, 1);
+  assert.equal(result.spatial.targets[0].y, 1.7);
+  assert.equal(result.spatial.targets[0].trackingState, 'held');
+  assert.equal(normalize({ cameras: payload.cameras }).spatial.targets.length, 0);
 });

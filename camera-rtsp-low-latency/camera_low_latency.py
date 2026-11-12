@@ -121,11 +121,13 @@ class FramePacket:
 
 
 class LatestFrameBuffer:
-    """A capacity-one frame buffer. Producers overwrite unconsumed frames."""
+    """Keep the latest frame and an optional short history for preview pairing."""
 
-    def __init__(self) -> None:
+    def __init__(self, history_size: int = 1) -> None:
+        if history_size < 1:
+            raise ValueError("history_size must be positive")
         self._condition = threading.Condition()
-        self._packet: FramePacket | None = None
+        self._packets: deque[FramePacket] = deque(maxlen=history_size)
         self._sequence = 0
         self._consumed_sequence = 0
         self._overwritten = 0
@@ -138,28 +140,29 @@ class LatestFrameBuffer:
         pts_backlog_seconds: float | None,
     ) -> None:
         with self._condition:
-            if self._packet is not None and self._packet.sequence > self._consumed_sequence:
+            if self._packets and self._packets[-1].sequence > self._consumed_sequence:
                 self._overwritten += 1
             self._sequence += 1
-            self._packet = FramePacket(
+            self._packets.append(FramePacket(
                 image=image,
                 sequence=self._sequence,
                 received_monotonic=received_monotonic,
                 pts_seconds=pts_seconds,
                 pts_backlog_seconds=pts_backlog_seconds,
-            )
+            ))
             self._condition.notify_all()
 
     def wait_for_new(self, last_sequence: int, timeout: float) -> FramePacket | None:
         with self._condition:
-            self._condition.wait_for(
-                lambda: self._packet is not None and self._packet.sequence > last_sequence,
+            ready = self._condition.wait_for(
+                lambda: bool(self._packets) and self._packets[-1].sequence > last_sequence,
                 timeout=timeout,
             )
-            if self._packet is None or self._packet.sequence <= last_sequence:
+            if not ready:
                 return None
-            self._consumed_sequence = self._packet.sequence
-            return self._packet
+            packet = self._packets[-1]
+            self._consumed_sequence = packet.sequence
+            return packet
 
     def latest(self) -> FramePacket | None:
         """Return the latest immutable packet reference without consuming it.
@@ -168,7 +171,20 @@ class LatestFrameBuffer:
         the desktop preview's overwrite/consumption accounting.
         """
         with self._condition:
-            return self._packet
+            return self._packets[-1] if self._packets else None
+
+    def recent_snapshots(self, after_sequence: int = 0) -> tuple[FramePacket, ...]:
+        """Return retained frames in order, without consuming them."""
+        if after_sequence < 0:
+            raise ValueError("after_sequence must be non-negative")
+        with self._condition:
+            return tuple(packet for packet in self._packets if packet.sequence > after_sequence)
+
+    def clear(self) -> None:
+        """Drop frames from a disconnected stream, keeping sequence numbers monotonic."""
+        with self._condition:
+            self._packets.clear()
+            self._condition.notify_all()
 
     def wait_for_new_snapshot(self, last_sequence: int, timeout: float) -> FramePacket | None:
         """Wait for a newer immutable packet without changing consumption stats.
@@ -182,13 +198,11 @@ class LatestFrameBuffer:
         if timeout < 0:
             raise ValueError("timeout must be non-negative")
         with self._condition:
-            self._condition.wait_for(
-                lambda: self._packet is not None and self._packet.sequence > last_sequence,
+            ready = self._condition.wait_for(
+                lambda: bool(self._packets) and self._packets[-1].sequence > last_sequence,
                 timeout=timeout,
             )
-            if self._packet is None or self._packet.sequence <= last_sequence:
-                return None
-            return self._packet
+            return self._packets[-1] if ready else None
 
     @property
     def overwritten(self) -> int:
@@ -568,7 +582,7 @@ class SnapshotWriter(threading.Thread):
         """Queue an already encoded PNG using the configured, trusted directory.
 
         The local camera bridge uses this for an Electron canvas capture that
-        already includes the exact person boxes shown to the operator. Callers
+        already includes the exact detection boxes shown to the operator. Callers
         must validate the PNG before submitting it; no client path is accepted.
         """
         path = self._allocate_path("png")
@@ -832,7 +846,7 @@ class StreamWorker(threading.Thread):
                         break
                     # The normal low-latency CLI uses compressed packet remuxing.
                     # The Electron bridge supplies a frame recorder instead so it
-                    # can burn the current person boxes into the saved video.
+                    # can burn the current detection boxes into the saved video.
                     if not callable(frame_recorder) and callable(packet_recorder):
                         packet_recorder(packet, stream)
                     for frame in packet.decode():
@@ -887,6 +901,7 @@ class StreamWorker(threading.Thread):
                 self.status.update(state="reconnecting", error=message, reconnects=reconnects)
                 LOG.error("Stream error: %s", message)
             finally:
+                self.frames.clear()
                 if container is not None:
                     container.close()
 

@@ -14,6 +14,14 @@ const emptyStatus: CameraBridgeStatus = {
   precision: 'unreported',
   previewProcessor: 'unreported',
   engineState: 'unreported',
+  spatial: {
+    state: 'uncalibrated',
+    message: '等待定位服务；请在设备管理中完成相机标定。',
+    units: 'm',
+    cameras: {},
+    targets: [],
+    diagnostics: {},
+  },
   matchingDiagnostics: {
     algorithmVersion: 'unreported',
     reason: 'waiting_for_frames',
@@ -73,6 +81,7 @@ export const useCameraStore = defineStore('camera', {
         // 强行映射兼容各种后端字段名
         const mappedStatus = {
           ...raw,
+          spatial: raw.spatial || emptyStatus.spatial,
           inferenceProvider: raw.inferenceProvider || (raw as any).inference_provider || 'tensorrt',
           engineState: raw.engineState || (raw as any).engine_state || 'ready',
           cameras: {
@@ -98,7 +107,8 @@ export const useCameraStore = defineStore('camera', {
           this.runState = 'paused';
         }
       } catch (err: any) {
-        this.status = { ...this.status, serviceState: 'error', error: err.message };
+        this.status = { ...this.status, serviceState: 'error', error: err.message,
+          spatial: { ...this.status.spatial, state: 'error', message: '无法获取定位状态：' + err.message, targets: [] } };
       }
     },
 
@@ -108,8 +118,9 @@ export const useCameraStore = defineStore('camera', {
           this.runState = 'starting';
           await cameraBridge.stopDetection();
           this.status.detecting = false;
+          this.status.spatial.targets = [];
           this.runState = 'paused';
-          this.toast('两路人物检测已暂停。', 'info');
+          this.toast('两路无人机检测已暂停。', 'info');
         } catch (err: any) {
           this.runState = 'running';
           this.toast(err.message, 'error');
@@ -121,7 +132,7 @@ export const useCameraStore = defineStore('camera', {
         await cameraBridge.startDetection();
         this.status.detecting = true;
         this.runState = 'running';
-        this.toast('两路摄像机人物检测与跟踪已启动。', 'success');
+        this.toast('两路无人机检测与跟踪已启动。', 'success');
       } catch (err: any) {
         this.runState = 'idle';
         this.toast(err.message, 'error');
@@ -132,8 +143,9 @@ export const useCameraStore = defineStore('camera', {
       try {
         await cameraBridge.stopDetection();
         this.status.detecting = false;
+        this.status.spatial.targets = [];
         this.runState = 'idle';
-        this.toast('人物检测已停止并清除跟踪框。', 'info');
+        this.toast('无人机检测已停止。', 'info');
       } catch (err: any) {
         this.toast(err.message, 'error');
       }

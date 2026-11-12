@@ -13,6 +13,7 @@ outputs/
 *.plan
 *.trt
 *.onnx
+!models/face_detection_yunet_2023mar.onnx
 *.pt
 *.pth
 *.mp4

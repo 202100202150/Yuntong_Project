@@ -1,7 +1,7 @@
 <template>
   <div class="workspace-container">
     <!-- 顶部工具栏（录制、截图） -->
-    <Teleport to="#global-header-actions">
+    <Teleport defer to="#global-header-actions">
       <div class="toolbar-actions">
         <button class="action-btn" :class="{ 'is-active': status.recording }" @click="toggleRecording" :disabled="!serviceReady || recordBusy">
           <Loader2 v-if="recordBusy" class="spin" :size="16" />
@@ -23,8 +23,8 @@
         <div class="card-header">
           <div class="card-title">
             <span>空间定位</span>
-            <span class="status-pill" :class="status.detecting ? 'success' : 'idle'">
-              {{ status.detecting ? '实时更新中' : '等待检测启动' }}
+            <span class="status-pill" :class="status.spatial.state === 'ready' ? 'success' : 'idle'">
+              {{ status.spatial.state === 'uncalibrated' ? '需要标定' : status.spatial.state === 'ready' ? '米制定位' : '等待有效定位' }}
             </span>
           </div>
           <div class="header-actions">
@@ -48,16 +48,15 @@
         <div class="card-body spatial-body">
           <SpatialScene
             ref="spatialSceneRef"
-            :objects="{ camera1: status.cameras.camera1.objects, camera2: status.cameras.camera2.objects }"
             :detecting="status.detecting"
-            :matching-diagnostics="status.matchingDiagnostics"
+            :spatial="status.spatial"
           />
           <div class="custom-legend">
-            <span><i class="dot x"></i> X 右</span>
+            <span><i class="dot x"></i> X 左</span>
             <span><i class="dot y"></i> Y 上</span>
-            <span><i class="dot z"></i> Z 深</span>
-            <span><i class="dot person"></i> person</span>
-            <span class="target-count">当前目标数：{{ totalTargets }}</span>
+            <span><i class="dot z"></i> Z 前</span>
+            <span><i class="dot drone"></i> 无人机</span>
+            <span class="target-count">有效定位：{{ totalTargets }} · 单位 m</span>
           </div>
         </div>
       </div>
@@ -65,7 +64,10 @@
       <!-- 双路监控面板 -->
       <div class="panel-card card-right">
         <div class="card-header">
-          <div class="card-title"><span>双路监控</span></div>
+          <div class="card-title">
+            <span>双路监控</span>
+            <span v-if="waitingForPair" class="status-pill idle">等待同步画面</span>
+          </div>
           <div class="header-actions">
             <button class="start-btn" :class="{ 'is-stop': status.detecting }" @click="toggleDetection" :disabled="!serviceReady || runState === 'starting'">
               <Loader2 v-if="runState === 'starting'" class="spin" :size="14" />
@@ -77,7 +79,10 @@
 
         <div class="card-body cameras-body">
           <div class="camera-wrapper" v-for="id in cameraIds" :key="id" :ref="(el) => setCameraRef(el, id)">
-            <CameraPanel :camera-id="id" :status="status.cameras[id]" :display-fps="getRealFps(id)" :bridge="status" />
+            <CameraPanel
+              :ref="(panel) => setCameraPanelRef(id, panel)"
+              :camera-id="id" :status="status.cameras[id]" :display-fps="getRealFps(id)" :bridge="status"
+            />
 
             <div class="error-overlay" v-if="!status.cameras[id].frameAvailable && status.serviceState === 'error'">
               <AlertCircle :size="24" class="error-icon" />
@@ -100,10 +105,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, nextTick } from 'vue';
+import { computed, onMounted, onUnmounted, ref, nextTick, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { Camera, Circle, Maximize, Play, Pause, Loader2, AlertCircle, RefreshCw } from 'lucide-vue-next';
 import { useCameraStore } from '@/stores/camera';
+import { cameraBridge } from '@/api/camera-bridge';
 import SpatialScene from '@/components/SpatialScene.vue';
 import CameraPanel from '@/components/CameraPanel.vue';
 import type { CameraId } from '@/types/camera-types';
@@ -118,6 +124,13 @@ const card3dRef = ref<HTMLElement | null>(null);
 const spatialSceneRef = ref<any>(null); // 👈 新增
 const camera1Ref = ref<HTMLElement | null>(null);
 const camera2Ref = ref<HTMLElement | null>(null);
+const cameraPanels: Partial<Record<CameraId, InstanceType<typeof CameraPanel>>> = {};
+const waitingForPair = ref(false);
+
+function setCameraPanelRef(id: CameraId, panel: unknown) {
+  if (panel) cameraPanels[id] = panel as InstanceType<typeof CameraPanel>;
+  else delete cameraPanels[id];
+}
 
 const setCameraRef = (el: any, id: CameraId) => {
   if (id === 'camera1') camera1Ref.value = el;
@@ -126,7 +139,14 @@ const setCameraRef = (el: any, id: CameraId) => {
 
 const serviceReady = computed(() => status.value.serviceState === 'ready' || status.value.serviceState === 'error');
 const bothFramesReady = computed(() => cameraIds.every((id) => status.value.cameras[id].frameAvailable));
-const totalTargets = computed(() => (status.value.cameras.camera1.detectionCount || 0) + (status.value.cameras.camera2.detectionCount || 0));
+const totalTargets = computed(() => status.value.detecting ? status.value.spatial.targets.length : 0);
+const previewMode = computed<'pair' | CameraId | null>(() => {
+  const live = cameraIds.filter((id) => {
+    const camera = status.value.cameras[id];
+    return camera.state === 'streaming' && camera.frameAvailable;
+  });
+  return live.length === 2 ? 'pair' : live[0] ?? null;
+});
 
 const getRealFps = (id: CameraId) => {
   const cam = status.value.cameras[id];
@@ -161,7 +181,95 @@ async function enterNativeFullscreen(target: '3d' | CameraId) {
 const handleFullscreenChange = () => nextTick(() => setTimeout(() => window.dispatchEvent(new Event('resize')), 100));
 
 let cancelled = false;
+let previewRequest: AbortController | undefined;
+const singleCursor: Record<CameraId, number> = { camera1: 0, camera2: 0 };
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+watch(previewMode, (mode) => {
+  previewRequest?.abort();
+  waitingForPair.value = false;
+  if (mode === 'camera1' || mode === 'camera2') singleCursor[mode] = 0;
+  if (mode !== 'pair') {
+    for (const id of cameraIds) {
+      if (id !== mode) cameraPanels[id]?.clearFrame();
+    }
+  }
+});
+
+// A restarted camera service can reset the old single-camera endpoint's frame sequence.
+watch(() => cameraIds.map((id) => status.value.cameras[id].sequence), (current, previous) => {
+  cameraIds.forEach((id, index) => {
+    if (current[index] < previous[index]) {
+      singleCursor[id] = 0;
+      if (previewMode.value === id) previewRequest?.abort();
+    }
+  });
+});
+
+async function runPreview() {
+  const pairedCursor = { camera1: 0, camera2: 0 };
+  let epoch = '';
+  while (!cancelled) {
+    const mode = previewMode.value;
+    const { camera1, camera2 } = cameraPanels;
+    if (!mode || !camera1 || !camera2 || document.hidden) {
+      await delay(100);
+      continue;
+    }
+    const request = new AbortController();
+    previewRequest = request;
+    try {
+      if (mode === 'pair') {
+        const pair = await cameraBridge.getPreviewPair(pairedCursor, epoch, request.signal);
+        if (request.signal.aborted) continue;
+        if (!pair) {
+          waitingForPair.value = true;
+          await delay(20);
+          continue;
+        }
+        pairedCursor.camera1 = pair.camera1.sequence;
+        pairedCursor.camera2 = pair.camera2.sequence;
+        epoch = pair.epoch;
+        const [first, second] = await Promise.allSettled([
+          createImageBitmap(pair.camera1.jpeg),
+          createImageBitmap(pair.camera2.jpeg),
+        ]);
+        if (request.signal.aborted || first.status !== 'fulfilled' || second.status !== 'fulfilled') {
+          if (first.status === 'fulfilled') first.value.close();
+          if (second.status === 'fulfilled') second.value.close();
+          continue;
+        }
+        // Present both decoded images in the same browser task. A slow JPEG
+        // never advances one canvas while the other is still on the old pair.
+        camera1.presentFrame(first.value);
+        camera2.presentFrame(second.value);
+        waitingForPair.value = false;
+      } else {
+        const frame = await cameraBridge.getFrame(mode, singleCursor[mode], request.signal);
+        if (request.signal.aborted) continue;
+        if (!frame) {
+          await delay(20);
+          continue;
+        }
+        singleCursor[mode] = frame.sequence;
+        const bytes = new Uint8Array(frame.jpegBytes);
+        const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
+        if (request.signal.aborted) bitmap.close();
+        else {
+          pairedCursor[mode] = frame.sequence;
+          (mode === 'camera1' ? camera1 : camera2).presentFrame(bitmap);
+        }
+      }
+    } catch {
+      if (!request.signal.aborted) await delay(150);
+    } finally {
+      previewRequest = undefined;
+    }
+  }
+}
+
 onMounted(() => {
+  void runPreview();
   (async () => {
     while (!cancelled) {
       try {
@@ -169,7 +277,8 @@ onMounted(() => {
       } catch (e) {
         // 静默处理
       }
-      await new Promise((r) => setTimeout(r, 1000));
+      // Localization runs in the sidecar independently of this serial poll.
+      await delay(status.value.detecting && !document.hidden ? 250 : 1000);
     }
   })();
   document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -177,6 +286,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   cancelled = true;
+  previewRequest?.abort();
   document.removeEventListener('fullscreenchange', handleFullscreenChange);
 });
 </script>
@@ -197,12 +307,12 @@ onUnmounted(() => {
 .status-pill.idle { background: #e2e8f0; color: #475569; }
 .status-pill.success { background: #dcfce7; color: #166534; }
 .spatial-body { padding: 0; display: flex; flex-direction: column; background-color: var(--header-bg); min-height: 0; }
-:deep(.spatial-scene-title), :deep(.spatial-mode-switch), :deep(.spatial-scene-hint), :deep(.spatial-reset), :deep(.spatial-scene-legend), :deep(.spatial-scene-readout) { display: none !important; }
+:deep(.spatial-scene-title), :deep(.spatial-mode-switch), :deep(.spatial-scene-hint), :deep(.spatial-scene-legend) { display: none !important; }
 :deep(.spatial-scene) { position: absolute; top: 0; left: 0; right: 0; bottom: 40px; background: transparent; overflow: hidden; }
 :deep(.spatial-scene canvas) { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; }
 .custom-legend { position: absolute; bottom: 0; left: 0; right: 0; height: 40px; background: var(--header-bg); display: flex; align-items: center; padding: 0 20px; gap: 16px; font-size: 12px; color: var(--text-sub); border-top: 1px solid var(--border-color); z-index: 10; }
 .custom-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
-.dot.x { background: #ef4444; } .dot.y { background: #10b981; } .dot.z { background: #3b82f6; } .dot.person { background: #14b8a6; }
+.dot.x { background: #ef4444; } .dot.y { background: #10b981; } .dot.z { background: #3b82f6; } .dot.drone { background: #14b8a6; }
 .target-count { margin-left: auto; font-weight: 600; color: var(--text-main); }
 .cameras-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow: hidden; background: transparent; }
 .camera-wrapper { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: 12px; }

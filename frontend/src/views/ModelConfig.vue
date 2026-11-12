@@ -8,7 +8,7 @@
         <h3>模型基础信息</h3>
         <div class="info-row">
           <span class="label">当前模型文件：</span>
-          <span class="value"><strong>person-v1.onnx</strong></span>
+          <span class="value"><strong>drone.onnx</strong></span>
         </div>
         <div class="info-row">
           <span class="label">推理引擎：</span>

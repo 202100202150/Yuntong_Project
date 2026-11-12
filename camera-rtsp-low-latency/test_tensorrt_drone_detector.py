@@ -5,18 +5,21 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
 import numpy as np
 
-import tensorrt_person_detector as detector_module
-from tensorrt_person_detector import (
+import tensorrt_drone_detector as detector_module
+from tensorrt_drone_detector import (
     EngineFingerprint,
+    INPUT_SHAPE,
+    OUTPUT_SHAPE,
     TensorRTDetectorError,
-    TensorRTPersonDetector,
+    TensorRTDroneDetector,
     _AccelerationModules,
-    _decode_person_output,
+    _decode_drone_output,
     _load_acceleration_modules,
     engine_cache_paths,
     load_cached_engine,
@@ -93,7 +96,7 @@ class FingerprintAndCacheTests(unittest.TestCase):
         ]
         self.assertEqual(self.fingerprint.digest, same.digest)
         self.assertTrue(all(item.digest != self.fingerprint.digest for item in changes))
-        self.assertEqual(self.fingerprint.components["inputShape"], [1, 3, 640, 640])
+        self.assertEqual(self.fingerprint.components["inputShape"], [1, 3, 1280, 1280])
         self.assertEqual(self.fingerprint.components["precision"], "fp32_tf32")
         self.assertEqual(
             self.fingerprint.components["cudaRuntimeVersion"], CUDA_RUNTIME_VERSION
@@ -109,7 +112,7 @@ class FingerprintAndCacheTests(unittest.TestCase):
             self.assertEqual(paths.engine.parent, root)
             self.assertEqual(paths.manifest.parent, root)
             self.assertNotIn("model", paths.engine.name)
-            self.assertRegex(paths.engine.name, r"^person-fp32-tf32-[0-9a-f]{64}\.plan$")
+            self.assertRegex(paths.engine.name, r"^drone-fp32-tf32-[0-9a-f]{64}\.plan$")
 
     def test_relative_or_traversing_cache_paths_are_rejected(self) -> None:
         with self.assertRaises(TensorRTDetectorError) as relative:
@@ -145,6 +148,32 @@ class FingerprintAndCacheTests(unittest.TestCase):
 
 
 class DependencyAndErrorBoundaryTests(unittest.TestCase):
+    def test_diagnostics_does_not_wait_for_engine_build(self) -> None:
+        detector = TensorRTDroneDetector(Path("model.onnx"), Path("cache"))
+        build_started = threading.Event()
+        finish_build = threading.Event()
+        observed: list[dict] = []
+
+        def build() -> None:
+            with detector._lock:
+                detector._state = "loading"
+                build_started.set()
+                finish_build.wait()
+
+        builder = threading.Thread(target=build)
+        status_request = threading.Thread(target=lambda: observed.append(detector.diagnostics()))
+        builder.start()
+        try:
+            self.assertTrue(build_started.wait(1))
+            status_request.start()
+            status_request.join(1)
+            self.assertEqual([status["engineState"] for status in observed], ["loading"])
+        finally:
+            finish_build.set()
+            builder.join()
+            if status_request.ident is not None:
+                status_request.join()
+
     def test_missing_tensor_rt_error_does_not_reveal_import_details(self) -> None:
         def missing_import(_name: str) -> object:
             raise ModuleNotFoundError(r"missing from C:\private\gpu-runtime")
@@ -176,7 +205,7 @@ class DependencyAndErrorBoundaryTests(unittest.TestCase):
 
     def test_invalid_configuration_is_sanitized_before_gpu_import(self) -> None:
         secret = Path(r"C:\users\private\secret-model.onnx")
-        detector = TensorRTPersonDetector(secret, Path("relative-cache"))
+        detector = TensorRTDroneDetector(secret, Path("relative-cache"))
         with self.assertRaises(TensorRTDetectorError) as caught:
             detector.load()
         self.assertEqual(caught.exception.code, "invalid_model")
@@ -197,23 +226,22 @@ class DependencyAndErrorBoundaryTests(unittest.TestCase):
 
 
 class DecoderProtocolTests(unittest.TestCase):
-    def test_decode_returns_camera_bridge_compatible_boxes_and_scores(self) -> None:
-        output = np.zeros((1, 5, 8400), dtype=np.float32)
-        output[0, :, 0] = [200, 200, 100, 100, 0.9]
-        output[0, :, 1] = [205, 205, 100, 100, 0.8]
-        output[0, :, 2] = [500, 400, 60, 80, 0.7]
-        decoded = _decode_person_output(
+    def test_decode_restores_xyxy_from_model_input_to_original_frame(self) -> None:
+        output = np.zeros(OUTPUT_SHAPE, dtype=np.float32)
+        output[0, 0] = [150, 400, 250, 450, 0.9, 0]
+        output[0, 1] = [450, 600, 510, 680, 0.8, 1]
+        output[0, 2] = [450, 600, 510, 680, 0.2, 0]
+        decoded = _decode_drone_output(
             output,
-            frame_width=640,
-            frame_height=640,
-            scale=1.0,
+            frame_width=2560,
+            frame_height=1440,
+            scale=0.5,
             pad_x=0.0,
-            pad_y=0.0,
+            pad_y=280.0,
             confidence_threshold=0.25,
-            nms_threshold=0.45,
         )
-        self.assertEqual(len(decoded), 2)
-        self.assertEqual(decoded[0][0], (150.0, 150.0, 250.0, 250.0))
+        self.assertEqual(len(decoded), 1)
+        self.assertEqual(decoded[0][0], (300.0, 240.0, 500.0, 340.0))
         self.assertAlmostEqual(decoded[0][1], 0.9, places=5)
 
 
@@ -280,15 +308,15 @@ class _FakeContext:
         self.addresses: dict[str, int] = {}
 
     def get_tensor_shape(self, name: str) -> tuple[int, ...]:
-        return (1, 3, 640, 640) if name == "images" else (1, 5, 8400)
+        return INPUT_SHAPE if name == "images" else OUTPUT_SHAPE
 
     def set_tensor_address(self, name: str, address: int) -> bool:
         self.addresses[name] = address
         return True
 
     def execute_async_v3(self, _stream_handle: int) -> bool:
-        output = np.zeros((1, 5, 8400), dtype=np.float32)
-        output[0, :, 0] = [320, 320, 100, 200, 0.75]
+        output = np.zeros(OUTPUT_SHAPE, dtype=np.float32)
+        output[0, 0] = [270, 220, 370, 420, 0.75, 0]
         ctypes.memmove(self.addresses["output0"], output.ctypes.data, output.nbytes)
         return True
 
@@ -356,7 +384,7 @@ class FakeRuntimeIntegrationTests(unittest.TestCase):
     def test_cached_engine_preallocates_once_infers_and_releases_without_real_cuda(self) -> None:
         with tempfile.TemporaryDirectory(dir=project_work_directory()) as temporary:
             root = Path(temporary).resolve()
-            model = root / "person.onnx"
+            model = root / "drone.onnx"
             model.write_bytes(b"fake-onnx-for-cache-identity")
             cache = root / "engine-cache"
             fake_trt = _FakeTensorRT()
@@ -371,13 +399,13 @@ class FakeRuntimeIntegrationTests(unittest.TestCase):
             store_cached_engine(cache, fingerprint, b"fake-plan")
             modules = _AccelerationModules(trt=fake_trt, cudart=fake_cuda)
             with patch.object(detector_module, "_load_acceleration_modules", return_value=modules):
-                detector = TensorRTPersonDetector(model, cache)
-                tensor = np.zeros((1, 3, 640, 640), dtype=np.float32)
+                detector = TensorRTDroneDetector(model, cache)
+                tensor = np.zeros(INPUT_SHAPE, dtype=np.float32)
                 first = detector.infer_raw(tensor)
                 allocation_count = len(fake_cuda.allocations)
                 second = detector.infer_raw(tensor)
-                self.assertEqual(first.shape, (1, 5, 8400))
-                self.assertAlmostEqual(float(first[0, 4, 0]), 0.75)
+                self.assertEqual(first.shape, OUTPUT_SHAPE)
+                self.assertAlmostEqual(float(first[0, 0, 4]), 0.75)
                 self.assertTrue(np.array_equal(first, second))
                 self.assertEqual(len(fake_cuda.allocations), allocation_count)
                 status = detector.diagnostics()
@@ -394,7 +422,7 @@ class FakeRuntimeIntegrationTests(unittest.TestCase):
     def test_cached_engine_deserialize_failure_rebuilds_exactly_once(self) -> None:
         with tempfile.TemporaryDirectory(dir=project_work_directory()) as temporary:
             root = Path(temporary).resolve()
-            model = root / "person.onnx"
+            model = root / "drone.onnx"
             model.write_bytes(b"fake-onnx-for-stale-cache")
             cache = root / "engine-cache"
             fake_trt = _FakeTensorRT(deserialize_failures=1)
@@ -416,7 +444,7 @@ class FakeRuntimeIntegrationTests(unittest.TestCase):
                     return_value=b"rebuilt-plan",
                 ) as build_engine,
             ):
-                detector = TensorRTPersonDetector(model, cache)
+                detector = TensorRTDroneDetector(model, cache)
                 detector.load()
                 self.assertEqual(fake_trt.deserialize_calls, 2)
                 build_engine.assert_called_once()
@@ -427,7 +455,7 @@ class FakeRuntimeIntegrationTests(unittest.TestCase):
     def test_inference_rejects_wrong_shape_without_running_context(self) -> None:
         with tempfile.TemporaryDirectory(dir=project_work_directory()) as temporary:
             root = Path(temporary).resolve()
-            model = root / "person.onnx"
+            model = root / "drone.onnx"
             model.write_bytes(b"fake-onnx")
             cache = root / "engine-cache"
             fake_trt = _FakeTensorRT()
@@ -442,7 +470,7 @@ class FakeRuntimeIntegrationTests(unittest.TestCase):
             store_cached_engine(cache, fingerprint, b"fake-plan")
             modules = _AccelerationModules(trt=fake_trt, cudart=fake_cuda)
             with patch.object(detector_module, "_load_acceleration_modules", return_value=modules):
-                detector = TensorRTPersonDetector(model, cache)
+                detector = TensorRTDroneDetector(model, cache)
                 with self.assertRaises(TensorRTDetectorError) as caught:
                     detector.infer(np.zeros((1, 3, 320, 320), dtype=np.float32))
                 self.assertEqual(caught.exception.code, "invalid_input")

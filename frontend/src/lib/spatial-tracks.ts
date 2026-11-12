@@ -1,4 +1,4 @@
-import type { CameraDetectedObject, CameraId } from './camera-types';
+import type { CameraDetectedObject, CameraId } from '../types/camera-types';
 
 const cameraIds: readonly CameraId[] = ['camera1', 'camera2'];
 
@@ -86,7 +86,7 @@ export function groupSpatialTracks(
       while (tracks.get(identity)?.[side]) {
         identity = sharedIdentity + ':' + cameraId + ':' + object.id + ':' + collision++;
       }
-      const track = tracks.get(identity) ?? { id: object.id };
+      const track: SpatialTrack = tracks.get(identity) ?? { id: object.id };
       track[side] = object;
       tracks.set(identity, track);
     });
