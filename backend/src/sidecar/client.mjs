@@ -10,6 +10,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backendRoot = path.resolve(__dirname, '..', '..');
 const defaultRoot = path.resolve(backendRoot, '..', 'desktop-app');
 const softwareRootPath = path.resolve(process.env.YUNTONG_ROOT || defaultRoot);
+let runtimeOptions = {};
+export function configureCameraBridge(options) { runtimeOptions = options; }
+export async function restartCameraBridge() {
+  await stopCameraBridge();
+  cameraBridge.shuttingDown = false;
+  cameraBridge.state = 'stopped';
+  cameraBridge.startPromise = null;
+  return startCameraBridge();
+}
 
 const cameraBridge = {
   state: 'stopped',
@@ -31,8 +40,8 @@ export function resolveCameraProject() {
     ? path.resolve(softwareRootPath, process.env.YUNTONG_CAMERA_PYTHON)
     : path.join(softwareRootPath, 'work', 'gpu-runtime', '.venv', 'Scripts', 'python.exe');
   const scriptPath = path.join(projectPath, 'camera_bridge.py');
-  const modelPath = process.env.YUNTONG_DRONE_MODEL
-    ? path.resolve(softwareRootPath, process.env.YUNTONG_DRONE_MODEL)
+  const modelPath = runtimeOptions.modelPath || process.env.YUNTONG_DRONE_MODEL
+    ? path.resolve(softwareRootPath, runtimeOptions.modelPath || process.env.YUNTONG_DRONE_MODEL)
     : path.join(softwareRootPath, 'models', 'drone.onnx');
   const engineCachePath = process.env.YUNTONG_TENSORRT_CACHE
     ? path.resolve(softwareRootPath, process.env.YUNTONG_TENSORRT_CACHE)
@@ -51,6 +60,7 @@ export function resolveCameraProject() {
 export function startCameraBridge() {
   if (cameraBridge.state === 'ready') return Promise.resolve();
   if (cameraBridge.startPromise) return cameraBridge.startPromise;
+  cameraBridge.shuttingDown = false;
   cameraBridge.state = 'starting';
   cameraBridge.error = '';
 
@@ -68,12 +78,13 @@ export function startCameraBridge() {
           '--preview-height', '432',
           '--preview-jpeg-quality', '78',
           '--preview-max-fps', '30',
-          '--detection-fps', '12.5',
+          '--detection-fps', String(runtimeOptions.detectionFps ?? 12.5),
         ],
         {
           cwd: paths.projectPath,
           env: {
             ...process.env,
+            ...runtimeOptions.env,
             CAMERA_BRIDGE_TOKEN: token,
             CAMERA_DRONE_MODEL: paths.modelPath,
             CAMERA_TENSORRT_CACHE: paths.engineCachePath,
@@ -149,7 +160,9 @@ export function startCameraBridge() {
       reject(new Error(message));
     }
   });
-  return cameraBridge.startPromise;
+  const pending = cameraBridge.startPromise;
+  pending.catch(() => { if (cameraBridge.startPromise === pending) cameraBridge.startPromise = null; });
+  return pending;
 }
 
 export function requestCameraBridge(pathname, options = {}) {

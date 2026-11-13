@@ -5,7 +5,7 @@
     <div class="cards-container camera-summary">
       <div v-for="id in cameraIds" :key="id" class="config-card">
         <h3>{{ id === 'camera1' ? 'Camera 1 / C1' : 'Camera 2 / C2' }}</h3>
-        <div class="form-group"><label>相机 IP</label><input :value="id === 'camera1' ? '10.108.16.9' : '10.108.16.8'" disabled /></div>
+        <div class="form-group"><label>视频通道</label><input :value="id === 'camera1' ? 'C1' : 'C2'" disabled /></div>
         <div class="form-row">
           <div class="form-group"><label>当前解码分辨率</label><input :value="cameraResolution(id)" disabled /></div>
           <div class="form-group"><label>当前检测帧率</label><input :value="store.status.cameras[id].detectionFps.toFixed(1) + ' FPS'" disabled /></div>
@@ -176,7 +176,7 @@ async function save() {
   saving.value = true; error.value = ''; success.value = '';
   try {
     const result = await cameraBridge.saveSpatialConfig(config.value); replaceConfig(result.config);
-    await store.refreshStatus(); success.value = '定位配置已保存；新参数用于下一组有效检测帧。';
+    await store.refreshStatus(); const application = result as typeof result & { applied?: boolean; message?: string }; success.value = application.applied === false ? (application.message || '定位配置已保存，摄像机服务启动后生效。') : '定位配置已保存；新参数用于下一组有效检测帧。';
   } catch (err) { error.value = (err as Error).message; }
   finally { saving.value = false; }
 }

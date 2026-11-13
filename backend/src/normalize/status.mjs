@@ -172,10 +172,8 @@ export function normalizeStatus(payload) {
     };
   }
 
-  const recording = typeof payload?.recording === 'boolean'
-    ? payload.recording
-    : Object.values(cameras).some((c) =>
-      ['armed', 'starting', 'recording', 'stopping'].includes(c.recordingState));
+  // Arming and finalizing are intermediate states, not completed recording.
+  const recording = Object.values(cameras).some((c) => c.recordingState === 'recording');
 
   const detectionModelState = boundedStatusString(
     rootDetection.modelState

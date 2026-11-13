@@ -1,0 +1,48 @@
+云瞳 AIRSPACE · 产品版启动与验收
+
+运行结构
+Web 与 Electron 共用 frontend 的 Vue 3 页面和 backend 的产品服务。
+产品界面包括运行总览、实时监控、事件复核、录像回放、设备与标定、模型及系统设置。
+账号、事件、审计与媒体索引使用本地 SQLite 持久保存。首次启动创建管理员，没有预设密码。
+
+启动
+需要 Node.js 22.13 或以上。Windows 下在仓库根目录运行：
+  .\启动Web产品.ps1
+或：
+  .\启动桌面产品.ps1
+脚本会在依赖尚未安装时执行 npm ci，并构建共享前端。
+Web 默认在 http://127.0.0.1:8000 提供页面和接口；Electron 使用随机本地端口。
+手动安装、运行环境及硬件配置见 backend/README.md 和 desktop-app/README.md。
+
+Windows 打包
+在仓库根目录运行：
+  npm --prefix desktop-app run desktop:pack
+目录包位于 desktop-app/outputs/win-unpacked，完整保留其内容并运行 YuntongWorkbench.exe。
+需要 NSIS 安装包时运行：
+  npm --prefix desktop-app run desktop:dist
+桌面数据位于 %APPDATA%\YuntongAIRSPACE\data；Web 数据默认位于 backend/data。
+升级时沿用原数据目录。旧窗口仍打开时，先关闭再启动新程序。
+
+空间态势
+原透视素材为 frontend/src/assets/campus-map.png。
+对应平面素材为 frontend/src/assets/campus-plan-v6.png，由内置图片工具依据原场景重绘。
+两张底图保留主楼、方馆、凹口复合楼、连接廊、弯曲绿地及运动场的视觉对应关系，
+共用缩放与平移视口；切换采用 200ms 淡化，遵循系统的减少动态效果设置。
+放大、缩小、重置、滚轮锚点缩放、拖动、方向键与 Home 均操作图像视口。
+平面不是同一三维模型的精确投影，局部遮挡轮廓、屋顶、树位和步道由图片工具重绘。
+校园底图尚未完成测量配准，真实目标继续在“相对定位”中查看实际米制坐标。
+内置字体及许可见 frontend/src/assets/fonts 与 frontend/public/licenses。
+
+验证命令
+在仓库根目录执行：
+  npm --prefix frontend run build
+  node --test frontend/tests/control-actions.test.cjs
+  npm --prefix backend test
+  npm --prefix desktop-app run test:product-actions
+桌面目录包生成后，可验证包内服务、会话、SQLite 与渲染隔离：
+  npm --prefix desktop-app run test:product-runtime
+桌面测试使用独立临时数据，不复用用户运行数据。
+
+运行边界
+监测、抓拍、录像、导出和模型操作根据实际设备与服务状态返回结果。
+真实 RTSP、TensorRT 推理性能与物理标定精度，需要在部署硬件及场地完成联调验收。
