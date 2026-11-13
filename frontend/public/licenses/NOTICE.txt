@@ -1,0 +1,6 @@
+Noto Sans SC variable font
+Copyright 2014–2021 Adobe
+Licensed under SIL Open Font License 1.1. See NotoSansSC-OFL.txt.
+Source: https://github.com/google/fonts/tree/main/ofl/notosanssc
+The original variable TrueType font is encoded as WOFF2 for local browser and desktop use.
+Yuntong Sans is the CSS family alias; the embedded font name is unchanged.

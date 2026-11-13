@@ -1,127 +1,48 @@
-<template>
-  <div class="workspace-container">
-    <!-- 顶部工具栏（录制、截图） -->
-    <Teleport defer to="#global-header-actions">
-      <div class="toolbar-actions">
-        <button class="action-btn" :class="{ 'is-active': status.recording }" @click="toggleRecording" :disabled="!serviceReady || recordBusy">
-          <Loader2 v-if="recordBusy" class="spin" :size="16" />
-          <Circle v-else :size="16" fill="currentColor" />
-          {{ status.recording ? '停止录制' : '开始录制' }}
-        </button>
-        <button class="action-btn" @click="captureBoth" :disabled="!serviceReady || !bothFramesReady || snapshotBusy">
-          <Loader2 v-if="snapshotBusy" class="spin" :size="16" />
-          <Camera v-else :size="16" />
-          截图保存
-        </button>
-      </div>
-    </Teleport>
-
-    <!-- 工作区网格 -->
-    <div class="workspace-grid">
-      <!-- 3D 面板 -->
-      <div class="panel-card card-left" ref="card3dRef">
-        <div class="card-header">
-          <div class="card-title">
-            <span>空间定位</span>
-            <span class="status-pill" :class="status.spatial.state === 'ready' ? 'success' : 'idle'">
-              {{ status.spatial.state === 'uncalibrated' ? '需要标定' : status.spatial.state === 'ready' ? '米制定位' : '等待有效定位' }}
-            </span>
-          </div>
-          <div class="header-actions">
-            <!-- 👇 新增：3D / 2D 切换按钮 -->
-            <div class="mode-switch">
-              <button
-                :class="{ active: spatialSceneRef?.sceneMode === '3d' }"
-                @click="spatialSceneRef?.switchMode('3d')"
-              >3D</button>
-              <button
-                :class="{ active: spatialSceneRef?.sceneMode === '2d' }"
-                @click="spatialSceneRef?.switchMode('2d')"
-              >2D</button>
-            </div>
-
-            <button class="icon-action-btn" @click="enterNativeFullscreen('3d')" title="全屏显示">
-              <Maximize :size="16" />
-            </button>
-          </div>
-        </div>
-        <div class="card-body spatial-body">
-          <SpatialScene
-            ref="spatialSceneRef"
-            :detecting="status.detecting"
-            :spatial="status.spatial"
-          />
-          <div class="custom-legend">
-            <span><i class="dot x"></i> X 左</span>
-            <span><i class="dot y"></i> Y 上</span>
-            <span><i class="dot z"></i> Z 前</span>
-            <span><i class="dot drone"></i> 无人机</span>
-            <span class="target-count">有效定位：{{ totalTargets }} · 单位 m</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- 双路监控面板 -->
-      <div class="panel-card card-right">
-        <div class="card-header">
-          <div class="card-title">
-            <span>双路监控</span>
-            <span v-if="waitingForPair" class="status-pill idle">等待同步画面</span>
-          </div>
-          <div class="header-actions">
-            <button class="start-btn" :class="{ 'is-stop': status.detecting }" @click="toggleDetection" :disabled="!serviceReady || runState === 'starting'">
-              <Loader2 v-if="runState === 'starting'" class="spin" :size="14" />
-              <component v-else :is="status.detecting ? Pause : Play" :size="14" />
-              {{ runState === 'starting' ? '启动中...' : status.detecting ? '暂停检测' : '开始检测' }}
-            </button>
-          </div>
-        </div>
-
-        <div class="card-body cameras-body">
-          <div class="camera-wrapper" v-for="id in cameraIds" :key="id" :ref="(el) => setCameraRef(el, id)">
-            <CameraPanel
-              :ref="(panel) => setCameraPanelRef(id, panel)"
-              :camera-id="id" :status="status.cameras[id]" :display-fps="getRealFps(id)" :bridge="status"
-            />
-
-            <div class="error-overlay" v-if="!status.cameras[id].frameAvailable && status.serviceState === 'error'">
-              <AlertCircle :size="24" class="error-icon" />
-              <p class="error-title">服务未连接：无法获取视频流 (500)</p>
-              <button @click="retryConnection" class="retry-btn">
-                <RefreshCw :size="14" /> 重新连接
-              </button>
-            </div>
-
-            <div class="camera-btn-group">
-              <button class="camera-action-btn" @click="enterNativeFullscreen(id)" title="全屏显示">
-                <Maximize :size="14" />
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</template>
-
+<template><section class="monitor-page">
+<div class="page-heading"><h1>实时监控</h1><div class="actions"><button class="btn" @click="captureBoth" :disabled="!auth.can('export')||!bothFramesReady||snapshotBusy" :title="!auth.can('export')?'当前账号没有抓拍权限':!bothFramesReady?'等待两路摄像机提供画面':'保存两路当前画面并提供下载'"><Camera :size="18"/>截图</button><button class="btn" @click="toggleRecording" :disabled="!auth.can('review')||recordBusy||store.recordingBusy||recordingFinishing||(!recordingActive&&!anyFramesReady)" :title="!auth.can('review')?'当前账号没有录制权限':recordingFinishing?'正在结束录像并写入文件':!recordingActive&&!anyFramesReady?'等待摄像机提供画面':recordingActive?'结束当前录像':'开始保存录像'"><Circle :size="16" :fill="status.recording?'currentColor':'none'"/>{{recordingLabel}}</button><button class="btn primary" @click="toggleDetection" :disabled="!auth.can('review')||store.detectionBusy||(!status.detecting&&!anyFramesReady)" :title="!auth.can('review')?'当前账号没有监测控制权限':!status.detecting&&!anyFramesReady?'等待摄像机提供画面':'切换监测服务状态'"><component :is="status.detecting?Pause:Play" :size="17"/>{{store.detectionBusy?'正在处理…':status.detecting?'暂停监测':'开始监测'}}</button></div></div>
+<div v-if="snapshotResults.length" class="snapshot-results" role="status"><span>本次抓拍</span><template v-for="result in snapshotResults" :key="result.cameraId"><button v-if="result.saved&&result.downloadUrl" class="btn" :disabled="snapshotDownloadBusy===result.cameraId" @click="downloadSnapshot(result)"><Download :size="16"/>下载 {{result.cameraId==='camera1'?'C1':'C2'}} 抓拍</button><span v-else class="muted">{{result.cameraId==='camera1'?'C1':'C2'}}：{{result.error||(result.queued?'等待文件写入确认':'未保存')}}</span></template><button class="icon-button" aria-label="收起抓拍结果" @click="snapshotResults=[]"><X :size="16"/></button></div>
+<div class="monitor-grid"><div class="panel space-panel" ref="card3dRef"><div class="panel-heading"><h3>空间态势</h3><div class="space-actions"><button class="view-switch" @click="relativeView=!relativeView" :title="relativeView?'查看校园底图':'查看真实米制坐标'"><component :is="relativeView?Map:Crosshair" :size="16"/>{{relativeView?'校园视图':'相对定位'}}</button><div class="mode-toggle"><button :class="{selected:mapMode==='2d'}" :aria-pressed="mapMode==='2d'" @click="changeMode('2d')">{{relativeView?'2D':'平面'}}</button><button :class="{selected:mapMode==='3d'}" :aria-pressed="mapMode==='3d'" @click="changeMode('3d')">{{relativeView?'3D':'透视'}}</button></div><button class="icon-button" title="全屏空间视图" @click="enterNativeFullscreen('3d')"><Maximize :size="17"/></button></div></div>
+<div class="target-strip"><strong v-if="primaryTarget" class="badge blue target-id">{{primaryTarget.id}}</strong><span class="badge" :class="status.detecting?'success':'neutral'"><i/>{{detectionLabel}}</span><template v-if="primaryTarget"><span class="target-field">距离 <b>{{primaryTarget.rangeMeters.toFixed(1)}}</b> m</span><span class="target-field">相对高度 <b>{{primaryTarget.y.toFixed(1)}}</b> m</span></template><span v-else class="target-placeholder">暂无定位目标</span><span class="target-count">{{totalTargets}} 个目标</span></div>
+<div class="space-canvas"><SpatialScene v-if="relativeView" ref="spatialSceneRef" :detecting="status.detecting" :spatial="status.spatial"/><CampusMap v-else ref="mapRef"/></div></div>
+<div class="panel camera-column"><div class="camera-wrapper" v-for="id in cameraIds" :key="id" :ref="el=>setCameraRef(el,id)"><CameraPanel :ref="panel=>setCameraPanelRef(id,panel)" :camera-id="id" :status="status.cameras[id]" :display-fps="getRealFps(id)" :bridge="status"/><button class="camera-fullscreen icon-button" @click="enterNativeFullscreen(id)" :aria-label="(id==='camera1'?'C1':'C2')+' 全屏视频'" title="切换视频全屏"><Maximize :size="17"/></button></div></div></div>
+<div class="monitor-bottom"><LiveTimeline :cameras="status.cameras"/><section class="panel pending-monitor"><div class="panel-heading"><h3>待复核事件 <span>{{pendingCount}}</span></h3><RouterLink to="/events" class="pending-more">查看全部 <ChevronRight :size="15"/></RouterLink></div><div v-if="pending" class="monitor-event"><div class="monitor-event-info"><strong><span class="badge blue">{{pending.trackId}}</span>目标检测</strong><time><CalendarDays :size="18"/>{{dateTime(pending.startedAt).replaceAll('/','-')}}</time></div><RouterLink :to="'/events?id='+pending.id" class="btn primary">{{auth.can('review')?'立即复核':'查看事件'}}</RouterLink></div><div v-else class="monitor-no-events"><CircleCheck :size="35" :stroke-width="1.4"/><div><strong>暂无待复核事件</strong><p>新的监测事件将自动同步至此</p></div></div></section></div>
+</section></template>
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, nextTick, watch } from 'vue';
 import { storeToRefs } from 'pinia';
-import { Camera, Circle, Maximize, Play, Pause, Loader2, AlertCircle, RefreshCw } from 'lucide-vue-next';
+import { Camera, Circle, Maximize, Play, Pause, Layers, Map, CircleCheck, ChevronRight, ScanLine, Crosshair, CalendarDays, Download, X } from 'lucide-vue-next';
 import { useCameraStore } from '@/stores/camera';
+import { useAuthStore } from '@/stores/auth';
 import { cameraBridge } from '@/api/camera-bridge';
 import SpatialScene from '@/components/SpatialScene.vue';
+import CampusMap from '@/components/CampusMap.vue';
+import LiveTimeline from '@/components/LiveTimeline.vue';
+import { http } from '@/api/http';
+import { dateTime, type ProductEvent } from '@/lib/product-format';
 import CameraPanel from '@/components/CameraPanel.vue';
-import type { CameraId } from '@/types/camera-types';
+import type { CameraId, SnapshotResult } from '@/types/camera-types';
+import { downloadFile } from '@/lib/download-file';
 
 const store = useCameraStore();
-const { status, runState } = storeToRefs(store);
+const auth = useAuthStore();
+const { status } = storeToRefs(store);
 const cameraIds: CameraId[] = ['camera1', 'camera2'];
 const recordBusy = ref(false);
+const mapRef = ref<InstanceType<typeof CampusMap> | null>(null);
+const relativeView = ref(false);
+const mapMode = ref<'2d'|'3d'>('3d');
+const pending = ref<ProductEvent | null>(null);
+const pendingCount = ref(0);
+let pendingTimer: ReturnType<typeof setInterval>;
+const primaryTarget = computed(() => status.value.detecting ? status.value.spatial.targets[0] : undefined);
+function changeMode(mode:'2d'|'3d'){mapMode.value=mode;mapRef.value?.switchMode(mode);spatialSceneRef.value?.switchMode(mode)}
+async function loadPending(){try{const{data}=await http.get('/overview');if(!cancelled){pending.value=data.pendingEvent||null;pendingCount.value=data.pendingEvents||0}}catch{ /* Camera monitoring remains available when the event index reconnects. */ }}
 const snapshotBusy = ref(false);
+const snapshotResults = ref<SnapshotResult[]>([]),snapshotDownloadBusy=ref('');
+async function downloadSnapshot(result:SnapshotResult){if(!result.downloadUrl)return;snapshotDownloadBusy.value=result.cameraId;try{await downloadFile(result.downloadUrl,result.name)}catch(e){store.toast((e as Error).message,'error')}finally{snapshotDownloadBusy.value=''}}
 
 const card3dRef = ref<HTMLElement | null>(null);
-const spatialSceneRef = ref<any>(null); // 👈 新增
+const spatialSceneRef = ref<InstanceType<typeof SpatialScene> | null>(null);
 const camera1Ref = ref<HTMLElement | null>(null);
 const camera2Ref = ref<HTMLElement | null>(null);
 const cameraPanels: Partial<Record<CameraId, InstanceType<typeof CameraPanel>>> = {};
@@ -132,13 +53,20 @@ function setCameraPanelRef(id: CameraId, panel: unknown) {
   else delete cameraPanels[id];
 }
 
-const setCameraRef = (el: any, id: CameraId) => {
-  if (id === 'camera1') camera1Ref.value = el;
-  if (id === 'camera2') camera2Ref.value = el;
+const setCameraRef = (el: unknown, id: CameraId) => {
+  if (id === 'camera1') camera1Ref.value = el as HTMLElement | null;
+  if (id === 'camera2') camera2Ref.value = el as HTMLElement | null;
 };
 
-const serviceReady = computed(() => status.value.serviceState === 'ready' || status.value.serviceState === 'error');
-const bothFramesReady = computed(() => cameraIds.every((id) => status.value.cameras[id].frameAvailable));
+watch(relativeView, async () => { await nextTick(); changeMode(mapMode.value); });
+
+const bothFramesReady = computed(() => cameraIds.every((id) => status.value.cameras[id].frameAvailable&&status.value.cameras[id].state==='streaming'));
+const anyFramesReady = computed(() => cameraIds.some(id=>status.value.cameras[id].frameAvailable&&status.value.cameras[id].state==='streaming'));
+const recordingStates=computed(()=>cameraIds.map(id=>status.value.cameras[id].recordingState));
+const recordingActive=computed(()=>recordingStates.value.some(state=>['armed','starting','recording','stopping'].includes(state)));
+const recordingFinishing=computed(()=>recordingStates.value.includes('stopping'));
+const recordingLabel=computed(()=>recordBusy.value||store.recordingBusy?'正在处理…':recordingFinishing.value?'正在保存…':status.value.recording?'停止录制':recordingActive.value?'取消录制':'录制');
+const detectionLabel=computed(()=>!status.value.detecting?'监测未启动':status.value.engineState==='ready'?'监测中':status.value.serviceState==='error'?'推理异常':'监测准备中');
 const totalTargets = computed(() => status.value.detecting ? status.value.spatial.targets.length : 0);
 const previewMode = computed<'pair' | CameraId | null>(() => {
   const live = cameraIds.filter((id) => {
@@ -154,18 +82,17 @@ const getRealFps = (id: CameraId) => {
 };
 
 const toggleDetection = () => store.toggleDetection();
-const retryConnection = () => store.refreshStatus();
 
 async function toggleRecording() {
-  if (!serviceReady.value || recordBusy.value) return;
+  if (!auth.can('review') || recordBusy.value || recordingFinishing.value || (!recordingActive.value&&!anyFramesReady.value)) return;
   recordBusy.value = true;
   try { await store.toggleRecording(); } finally { recordBusy.value = false; }
 }
 
 async function captureBoth() {
-  if (!serviceReady.value || snapshotBusy.value) return;
+  if (!auth.can('export') || !bothFramesReady.value || snapshotBusy.value) return;
   snapshotBusy.value = true;
-  try { await store.captureBoth(); } finally { snapshotBusy.value = false; }
+  try { snapshotResults.value = await store.captureBoth(); } finally { snapshotBusy.value = false; }
 }
 
 async function enterNativeFullscreen(target: '3d' | CameraId) {
@@ -270,104 +197,20 @@ async function runPreview() {
 
 onMounted(() => {
   void runPreview();
-  (async () => {
-    while (!cancelled) {
-      try {
-        await store.refreshStatus();
-      } catch (e) {
-        // 静默处理
-      }
-      // Localization runs in the sidecar independently of this serial poll.
-      await delay(status.value.detecting && !document.hidden ? 250 : 1000);
-    }
-  })();
+  void loadPending();
+  pendingTimer = setInterval(loadPending, 5000);
   document.addEventListener('fullscreenchange', handleFullscreenChange);
 });
 
 onUnmounted(() => {
   cancelled = true;
+  clearInterval(pendingTimer);
   previewRequest?.abort();
   document.removeEventListener('fullscreenchange', handleFullscreenChange);
 });
 </script>
-
 <style scoped>
-.workspace-container { width: 100%; height: 100%; padding: 24px; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; }
-.toolbar-actions { display: flex; align-items: center; gap: 12px; }
-.toolbar-actions .action-btn { display: flex; align-items: center; gap: 6px; padding: 6px 14px; background: transparent; border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-main); font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
-.toolbar-actions .action-btn:hover:not(:disabled) { background: rgba(148, 163, 184, 0.1); border-color: #94a3b8; }
-.toolbar-actions .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.toolbar-actions .action-btn.is-active { background: rgba(239, 68, 68, 0.1); border-color: #ef4444; color: #ef4444; }
-.workspace-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 24px; flex: 1; min-height: 0; }
-.panel-card { background: var(--header-bg); border-radius: 16px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-color); }
-.card-header { padding: 16px 20px; background: var(--header-bg); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; height: 64px; box-sizing: border-box; }
-.card-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 12px; color: var(--text-main); }
-.card-body { flex: 1; position: relative; min-height: 0; }
-.status-pill { font-size: 12px; padding: 3px 8px; border-radius: 12px; font-weight: normal; }
-.status-pill.idle { background: #e2e8f0; color: #475569; }
-.status-pill.success { background: #dcfce7; color: #166534; }
-.spatial-body { padding: 0; display: flex; flex-direction: column; background-color: var(--header-bg); min-height: 0; }
-:deep(.spatial-scene-title), :deep(.spatial-mode-switch), :deep(.spatial-scene-hint), :deep(.spatial-scene-legend) { display: none !important; }
-:deep(.spatial-scene) { position: absolute; top: 0; left: 0; right: 0; bottom: 40px; background: transparent; overflow: hidden; }
-:deep(.spatial-scene canvas) { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; }
-.custom-legend { position: absolute; bottom: 0; left: 0; right: 0; height: 40px; background: var(--header-bg); display: flex; align-items: center; padding: 0 20px; gap: 16px; font-size: 12px; color: var(--text-sub); border-top: 1px solid var(--border-color); z-index: 10; }
-.custom-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
-.dot.x { background: #ef4444; } .dot.y { background: #10b981; } .dot.z { background: #3b82f6; } .dot.drone { background: #14b8a6; }
-.target-count { margin-left: auto; font-weight: 600; color: var(--text-main); }
-.cameras-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow: hidden; background: transparent; }
-.camera-wrapper { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: 12px; }
-.camera-btn-group { position: absolute; top: 8px; right: 8px; z-index: 99; display: flex; gap: 6px; }
-.camera-action-btn { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; background: rgba(255, 255, 255, 0.9); border: 1px solid #cbd5e1; border-radius: 6px; color: #475569; cursor: pointer; }
-.error-overlay { position: absolute; top: 44px; left: 0; right: 0; bottom: 0; background: rgba(30, 41, 59, 0.95); display: flex; flex-direction: column; align-items: center; justify-content: center; color: #cbd5e1; z-index: 50; border-radius: 0 0 12px 12px; padding: 16px; box-sizing: border-box; }
-.error-icon { color: #f87171; margin-bottom: 8px; flex-shrink: 0; }
-.error-title { margin: 0 0 20px 0; font-size: 14px; font-weight: 500; color: #f8fafc; text-align: center; flex-shrink: 0; }
-.retry-btn { display: flex; align-items: center; gap: 6px; background: #3b82f6; color: white; border: 0; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.2s; flex-shrink: 0; }
-.retry-btn:hover { background: #2563eb; }
-:deep(.dc-camera-panel .dc-camera-placeholder), :deep(.dc-camera-panel .error-message), :deep(.dc-camera-panel .dc-camera-error), :deep(.dc-camera-panel .dc-camera-overlay), :deep(.dc-camera-panel .dc-camera-status-text) { display: none !important; }
-:deep(.dc-camera-panel) { flex: 1; min-height: 0; height: 100%; display: flex; flex-direction: column; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; background: transparent; }
-:deep(.dc-camera-panel > header) { height: 44px; flex-shrink: 0; background: var(--header-bg); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; padding-right: 76px; }
-:deep(.dc-camera-panel > header svg) { display: none; }
-:deep(.dc-camera-panel > header strong) { color: var(--text-main); }
-:deep(.dc-camera-meta) { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--text-sub); }
-:deep(.dc-camera-viewport) { flex: 1; min-height: 0; height: 100%; background: #cbd5e1; position: relative; overflow: hidden; }
-:deep(.dc-camera-viewport canvas) { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
-.start-btn { display: flex; align-items: center; gap: 6px; background: #059669; color: #ffffff; border: 0; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; flex-shrink: 0; transition: background 0.2s; }
-.start-btn:hover:not(:disabled) { background: #047857; }
-.start-btn.is-stop { background: #ef4444; }
-.start-btn.is-stop:hover:not(:disabled) { background: #dc2626; }
-.start-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.header-actions { display: flex; align-items: center; gap: 8px; }
-.icon-action-btn { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: transparent; border: 1px solid transparent; border-radius: 6px; color: var(--text-sub); cursor: pointer; transition: all 0.2s; }
-.icon-action-btn:hover { background: #f1f5f9; color: var(--text-main); }
-.spin { animation: spin 1s linear infinite; }
-@keyframes spin { 100% { transform: rotate(360deg); } }
-
-/* 👇 新增 3D/2D 切换按钮样式 */
-.mode-switch {
-  display: flex;
-  background: rgba(148, 163, 184, 0.1);
-  border-radius: 6px;
-  padding: 2px;
-  margin-right: 8px;
-}
-.mode-switch button {
-  padding: 4px 12px;
-  border: none;
-  background: transparent;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-sub);
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.mode-switch button.active {
-  background: var(--header-bg);
-  color: #3b82f6;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-}
-
-.panel-card:fullscreen, .camera-wrapper:fullscreen, .panel-card:fullscreen :deep(.dc-camera-panel), .camera-wrapper:fullscreen :deep(.dc-camera-panel) { border-radius: 0 !important; border: none !important; width: 100vw !important; height: 100vh !important; display: flex !important; flex-direction: column !important; background: var(--header-bg) !important; }
-.panel-card:fullscreen :deep(.dc-camera-viewport), .camera-wrapper:fullscreen :deep(.dc-camera-viewport) { flex: 1 !important; height: 100% !important; }
-.panel-card:fullscreen .header-actions, .camera-wrapper:fullscreen .camera-btn-group { display: none !important; }
+.snapshot-results{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;margin-bottom:10px;border:1px solid #cddced;border-radius:8px;background:#f7faff;font-size:14px}.snapshot-results>.icon-button{margin-left:auto}.snapshot-results .btn{font-size:14px;min-height:34px}
+.monitor-page>.page-heading .actions{gap:15px}.monitor-page>.page-heading .actions .btn{font-size:18px;min-width:104px;min-height:40px}.monitor-page>.page-heading .actions .btn:last-child{min-width:138px}.monitor-grid{display:grid;grid-template-columns:minmax(0,1.435fr) minmax(360px,1fr);gap:8px;height:574px;min-height:440px}.space-panel{position:relative;display:flex;flex-direction:column;overflow:hidden;padding:0 12px 12px}.space-panel .panel-heading{padding:10px 4px 9px;min-height:53px;height:53px}.space-panel h3{margin:0;font-size:24px;font-weight:700}.space-actions{display:flex;align-items:center;gap:9px}.view-switch{display:flex;align-items:center;gap:5px;background:none;border:0;color:#8192ad;font-size:12px;padding:5px}.view-switch:hover{color:var(--blue)}.mode-toggle{position:absolute;right:24px;top:123px;z-index:3;display:flex;border:3px solid #fff;border-radius:8px;height:35px;overflow:hidden;box-shadow:0 2px 6px #253a5210}.mode-toggle button{border:0;background:#fff;color:#536783;padding:3px 13px;font-size:16px;font-weight:500}.mode-toggle button.selected{background:var(--blue);color:#fff;border-radius:5px}.space-actions .icon-button{width:28px;height:28px}.target-strip{display:flex;align-items:center;gap:17px;height:46px;flex-shrink:0;border:1px solid #e4eaf4;background:#f7f9fd;border-radius:7px;margin-bottom:10px;padding:0 12px;font-size:17px;color:#18253c}.target-strip>.badge{font-size:16px;padding:4px 10px}.target-strip>.target-id{min-width:80px;justify-content:center;font-size:18px}.target-strip strong{font-size:18px;font-weight:600}.target-strip b{color:#172033;font-weight:600}.target-field{border-left:1px solid #b9c8df;padding-left:20px;white-space:nowrap}.target-count{font-size:13px;margin-left:auto;color:#9aa8bb;white-space:nowrap}.target-placeholder{font-size:16px;color:#74839b}.space-canvas{flex:1;position:relative;min-height:0;border-radius:7px;overflow:hidden}.camera-column{display:grid;grid-template-rows:1fr 1fr;gap:14px;min-height:0;padding:11px 12px}.camera-wrapper{position:relative;min-height:0;overflow:hidden;border-radius:10px;border:1px solid #d6deeb}.camera-fullscreen{position:absolute;z-index:5;bottom:6px;right:10px;color:white;width:30px;height:30px}.camera-fullscreen svg{width:23px;height:23px}.camera-fullscreen:hover{background:#ffffff25;color:#fff}.monitor-bottom{display:grid;grid-template-columns:minmax(0,2.18fr) minmax(310px,1fr);gap:10px;margin-top:10px;height:206px}.pending-monitor{overflow:hidden}.pending-monitor .panel-heading{height:65px;padding:15px 20px}.pending-monitor h3{font-size:19px;font-weight:700}.pending-monitor h3>span{font-size:17px;color:#59667a;margin-left:6px;font-weight:600}.pending-more{font-size:13px;color:#6d7b92;display:flex;align-items:center;white-space:nowrap}.monitor-event{display:flex;align-items:center;gap:14px;margin:0 16px;padding:15px 13px;background:#fbfcff;border:1px solid #d4deee;border-radius:9px;min-height:108px}.monitor-event-info{min-width:0;flex:1}.monitor-event-info strong{font-size:17px;font-weight:600;white-space:nowrap;display:flex;align-items:center;gap:13px}.monitor-event-info .badge{font-size:17px;padding:3px 9px}.monitor-event-info time{display:flex;gap:12px;align-items:center;font-size:15px;color:#35445e;margin-top:15px;white-space:nowrap}.monitor-event>.btn{margin-left:auto;font-size:16px;min-height:36px;padding:5px 13px}.monitor-no-events{display:flex;align-items:center;justify-content:center;gap:17px;padding:35px 20px;color:#a2b2c6}.monitor-no-events strong{font-size:17px;color:#72859e;font-weight:500}.monitor-no-events p{margin:10px 0 0;font-size:14px;color:#9aa9bd}.space-panel:fullscreen,.camera-wrapper:fullscreen{width:100vw;height:100vh;background:#fff}.space-panel:fullscreen .space-canvas{height:100%}
+@media(min-height:1000px) and (min-width:1300px){.monitor-grid{height:calc(100dvh - 368px)}}@media(max-width:1350px){.target-placeholder,.target-count{display:none}.monitor-event{gap:10px}.monitor-event-info strong{font-size:15px}.monitor-event-info time{font-size:12px}.monitor-event>.btn{font-size:14px;padding:5px 9px}.monitor-event-info p{font-size:12px}.space-actions{gap:4px}.monitor-grid{grid-template-columns:minmax(0,1.3fr) minmax(330px,1fr)}}@media(max-width:1100px){.monitor-grid{grid-template-columns:1fr;height:auto;min-height:0}.space-panel{height:520px}.camera-column{grid-template-columns:1fr 1fr;grid-template-rows:260px}.monitor-bottom{grid-template-columns:1fr;height:auto}.pending-monitor{min-height:200px}.monitor-bottom>.live-timeline{height:206px}.monitor-event>.btn{position:static}.monitor-event{min-height:120px}}@media(max-width:700px){.camera-column{grid-template-columns:1fr;grid-template-rows:240px 240px}.space-panel{height:430px;padding:0 8px 8px}.target-strip{gap:10px;padding:0 8px;font-size:12px}.target-strip strong{font-size:14px}.target-strip>.badge{font-size:11px}.view-switch{font-size:0}.space-panel .panel-heading h3{font-size:20px}.monitor-page .actions{width:100%;justify-content:flex-end}.mode-toggle button{padding:3px 8px}}
 </style>

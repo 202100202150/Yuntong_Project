@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { cameraBridge } from '@/api/camera-bridge';
-import type { CameraBridgeStatus, CameraId } from '@/types/camera-types';
+import type { CameraBridgeStatus, CameraId, SnapshotResult } from '@/types/camera-types';
 
 type RunState = 'idle' | 'starting' | 'running' | 'paused';
 type Toast = { id: number; message: string; tone: 'info' | 'success' | 'error' };
@@ -61,6 +61,8 @@ export const useCameraStore = defineStore('camera', {
   state: () => ({
     status: emptyStatus as CameraBridgeStatus,
     runState: 'idle' as RunState,
+    detectionBusy: false,
+    recordingBusy: false,
     displayFps: { camera1: 0, camera2: 0 } as Record<CameraId, number>,
     toasts: [] as Toast[],
   }),
@@ -82,8 +84,8 @@ export const useCameraStore = defineStore('camera', {
         const mappedStatus = {
           ...raw,
           spatial: raw.spatial || emptyStatus.spatial,
-          inferenceProvider: raw.inferenceProvider || (raw as any).inference_provider || 'tensorrt',
-          engineState: raw.engineState || (raw as any).engine_state || 'ready',
+          inferenceProvider: raw.inferenceProvider || (raw as any).inference_provider || 'unreported',
+          engineState: raw.engineState || (raw as any).engine_state || 'unreported',
           cameras: {
             camera1: {
               ...raw.cameras.camera1,
@@ -101,75 +103,83 @@ export const useCameraStore = defineStore('camera', {
         this.status = mappedStatus as unknown as CameraBridgeStatus;
 
         // 同步 runState 状态
-        if (this.status.detecting && this.runState !== 'running') {
+        if (!this.detectionBusy && this.status.detecting && this.runState !== 'running') {
           this.runState = 'running';
-        } else if (!this.status.detecting && this.runState === 'running') {
+        } else if (!this.detectionBusy && !this.status.detecting && this.runState === 'running') {
           this.runState = 'paused';
         }
       } catch (err: any) {
-        this.status = { ...this.status, serviceState: 'error', error: err.message,
+        this.runState = 'idle';
+        this.status = { ...this.status, detecting: false, recording: false, serviceState: 'error', error: err.message,
+          cameras: { camera1: { ...emptyStatus.cameras.camera1, state: 'error' }, camera2: { ...emptyStatus.cameras.camera2, state: 'error' } },
           spatial: { ...this.status.spatial, state: 'error', message: '无法获取定位状态：' + err.message, targets: [] } };
       }
     },
 
-    async toggleDetection() {
-      if (this.runState === 'running') {
-        try {
-          this.runState = 'starting';
-          await cameraBridge.stopDetection();
-          this.status.detecting = false;
-          this.status.spatial.targets = [];
-          this.runState = 'paused';
-          this.toast('两路无人机检测已暂停。', 'info');
-        } catch (err: any) {
-          this.runState = 'running';
-          this.toast(err.message, 'error');
-        }
-        return;
-      }
+    async setDetection(enabled: boolean): Promise<void> {
+      if (this.detectionBusy) return;
+      this.detectionBusy = true;
+      this.runState = 'starting';
       try {
-        this.runState = 'starting';
-        await cameraBridge.startDetection();
-        this.status.detecting = true;
-        this.runState = 'running';
-        this.toast('两路无人机检测与跟踪已启动。', 'success');
+        const confirmed = enabled ? await cameraBridge.startDetection() : await cameraBridge.stopDetection();
+        this.status = confirmed;
+        if (confirmed.detecting !== enabled) throw new Error('服务未确认监测状态改变，请检查设备与推理服务后重试。');
+        if (!enabled) this.toast('监测已暂停。', 'info');
+        else if (confirmed.engineState === 'ready') this.toast('监测已启动。', 'success');
+        else if (confirmed.serviceState === 'error') this.toast(confirmed.error || '监测已启用，但推理服务异常。', 'error');
+        else this.toast('监测已启用，推理服务正在准备。', 'info');
       } catch (err: any) {
-        this.runState = 'idle';
         this.toast(err.message, 'error');
+        await this.refreshStatus();
+      } finally {
+        this.detectionBusy = false;
+        this.runState = this.status.detecting ? 'running' : this.status.serviceState === 'error' ? 'idle' : 'paused';
       }
     },
 
-    async stopDetection() {
-      try {
-        await cameraBridge.stopDetection();
-        this.status.detecting = false;
-        this.status.spatial.targets = [];
-        this.runState = 'idle';
-        this.toast('无人机检测已停止。', 'info');
-      } catch (err: any) {
-        this.toast(err.message, 'error');
-      }
+    async toggleDetection(): Promise<void> {
+      await this.setDetection(!this.status.detecting);
+    },
+
+    async stopDetection(): Promise<void> {
+      await this.setDetection(false);
     },
 
     async toggleRecording() {
+      if (this.recordingBusy) return;
+      this.recordingBusy = true;
       try {
         const result = await cameraBridge.toggleRecording();
-        this.status = { ...this.status, recording: result.recording };
-        this.toast(result.recording ? '已开始带框录像。' : '已停止录像。', result.recording ? 'success' : 'info');
+        this.status = { ...this.status, recording: result.recording, cameras: {
+          camera1: { ...this.status.cameras.camera1, recordingState: result.cameras.camera1.state },
+          camera2: { ...this.status.cameras.camera2, recordingState: result.cameras.camera2.state },
+        } };
+        const states = Object.values(result.cameras);
+        if (states.some(camera => camera.state === 'error')) this.toast(states.find(camera => camera.state === 'error')?.error || '部分录像失败，请检查设备及录像目录。', 'error');
+        else if (states.some(camera => camera.state === 'stopping')) this.toast('正在结束录像并写入文件。', 'info');
+        else if (states.some(camera => ['armed','starting'].includes(camera.state))) this.toast('已请求录制，正在等待画面和录像文件就绪。', 'info');
+        else if (states.filter(camera => camera.state === 'recording').length === 2) this.toast('两路录像已开始写入。', 'success');
+        else if (result.recording) this.toast('当前仅一路正在录像，请检查另一设备状态。', 'info');
+        else if (result.requestedRecording) this.toast('录像未开始，请检查设备状态后重试。', 'error');
+        else this.toast('录像已停止。', 'info');
       } catch (err: any) {
         this.toast(err.message, 'error');
+      } finally {
+        this.recordingBusy = false;
       }
     },
 
-    async captureBoth() {
+    async captureBoth(): Promise<SnapshotResult[]> {
       try {
         const result = await cameraBridge.saveSnapshots();
         const saved = result.results.filter((r) => r.saved);
         if (saved.length === 2) this.toast('两路抓拍已保存。', 'success');
         else if (saved.length === 1) this.toast(`仅 ${saved[0].cameraId} 保存成功。`, 'error');
-        else this.toast('两路抓拍均失败。', 'error');
+        else this.toast(result.results.find(r => r.error)?.error || (result.results.some(r => r.queued) ? '抓拍仍在处理，尚未确认文件保存。' : '两路抓拍均失败。'), 'error');
+        return result.results;
       } catch (err: any) {
         this.toast(err.message, 'error');
+        return [];
       }
     },
   },

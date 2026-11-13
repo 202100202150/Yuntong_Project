@@ -10,6 +10,7 @@ export const http = axios.create({
 http.interceptors.response.use(
   (res) => res,
   (error) => {
+    if (error?.response?.status === 401 && !error.config?.url?.startsWith('/auth/')) window.dispatchEvent(new Event('yuntong:session-expired'));
     const message =
       error?.response?.data?.error ??
       error?.message ??

@@ -13,7 +13,7 @@
       <span v-for="[id, point] in cameraEntries" :key="id">{{ cameraLabel(id, point) }} ({{ point.x.toFixed(3) }}, {{ point.y.toFixed(3) }}, {{ point.z.toFixed(3) }}) m · 原点距 {{ originDistance(point) }} m</span>
       <span>无人机三维坐标 (X, Y, Z) · 方位左为正 · 仰角上为正 · 网格 {{ gridStep.toFixed(gridStep < 1 ? 1 : 0) }} m</span>
     </div>
-    <label class="spatial-campus-toggle"><input v-model="showCampus" type="checkbox" /> 显示校园示意模型（未与现场配准）</label>
+    <label class="spatial-campus-toggle"><input v-model="showCampus" type="checkbox" /> 建筑参考层（未配准）</label>
   </div>
 </template>
 
@@ -31,7 +31,7 @@ const transitionMs = 160;
 const defaultLimits: Limits = { xMin: -2, xMax: 2, yMin: -1, yMax: 2, zMin: -1, zMax: 3 };
 const limitKeys = Object.keys(defaultLimits) as (keyof Limits)[];
 const props = defineProps<{ detecting: boolean; spatial: SpatialStatus }>();
-const cameraEntries = computed(() => Object.entries(props.spatial.cameras));
+const cameraEntries = computed(() => ['uncalibrated','error'].includes(props.spatial.state) ? [] : Object.entries(props.spatial.cameras));
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const sceneMode = ref<SceneMode>('3d');
 const showCampus = ref(false);
@@ -120,7 +120,7 @@ function arrow(ctx: CanvasRenderingContext2D, a: ProjectedPoint, b: ProjectedPoi
   ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(b.x, b.y);
   ctx.lineTo(b.x - 7 * Math.cos(angle - 0.48), b.y - 7 * Math.sin(angle - 0.48));
   ctx.lineTo(b.x - 7 * Math.cos(angle + 0.48), b.y - 7 * Math.sin(angle + 0.48));
-  ctx.closePath(); ctx.fill(); ctx.font = '700 11px sans-serif'; ctx.fillText(label, b.x + 7, b.y - 7);
+  ctx.closePath(); ctx.fill(); ctx.font = '600 13px "Yuntong Sans", sans-serif'; ctx.fillText(label, b.x + 7, b.y - 7);
 }
 
 function scheduleDraw() {
@@ -146,7 +146,7 @@ function draw(now: number) {
   if (canvas.height !== pixelsHigh) canvas.height = pixelsHigh;
   const ctx = canvas.getContext('2d'); if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const bg = ctx.createLinearGradient(0, 0, 0, height); bg.addColorStop(0, '#fffdfa'); bg.addColorStop(1, '#f9f6ef');
+  const bg = ctx.createLinearGradient(0, 0, 0, height); bg.addColorStop(0, '#f5f8fc'); bg.addColorStop(1, '#edf3f9');
   ctx.fillStyle = bg; ctx.fillRect(0, 0, width, height);
   const b = boundsAt(now);
   const rawProject = (pt: SpatialPoint): ProjectedPoint => {
@@ -168,17 +168,17 @@ function draw(now: number) {
   const step = gridStep.value;
   for (let x = Math.ceil(b.xMin / step) * step; x <= b.xMax; x += step) {
     line(ctx, p({ x, y: 0, z: b.zMin }), p({ x, y: 0, z: b.zMax }), Math.abs(x) < step / 2 ? '#a6b8c8' : '#d0dbe5');
-    if (Math.abs(x) > step / 2) { const tick = p({ x, y: 0, z: 0 }); ctx.fillStyle = '#6d8195'; ctx.font = '10px sans-serif'; ctx.fillText(x.toFixed(step < 1 ? 1 : 0), tick.x + 3, tick.y + 12); }
+    if (Math.abs(x) > step / 2) { const tick = p({ x, y: 0, z: 0 }); ctx.fillStyle = '#6d8195'; ctx.font = '500 12px "Yuntong Sans", sans-serif'; ctx.fillText(x.toFixed(step < 1 ? 1 : 0), tick.x + 3, tick.y + 12); }
   }
   for (let z = Math.ceil(b.zMin / step) * step; z <= b.zMax; z += step) {
     line(ctx, p({ x: b.xMin, y: 0, z }), p({ x: b.xMax, y: 0, z }), Math.abs(z) < step / 2 ? '#a6b8c8' : '#d0dbe5');
-    if (Math.abs(z) > step / 2) { const tick = p({ x: 0, y: 0, z }); ctx.fillStyle = '#6d8195'; ctx.font = '10px sans-serif'; ctx.fillText(z.toFixed(step < 1 ? 1 : 0), tick.x + 4, tick.y - 3); }
+    if (Math.abs(z) > step / 2) { const tick = p({ x: 0, y: 0, z }); ctx.fillStyle = '#6d8195'; ctx.font = '500 12px "Yuntong Sans", sans-serif'; ctx.fillText(z.toFixed(step < 1 ? 1 : 0), tick.x + 4, tick.y - 3); }
   }
   if (showCampus.value) {
     if (sceneMode.value === '2d') drawCampusBuildingsPlan(ctx, p); else drawCampusBuildings(ctx, p);
   }
   const origin = p({ x: 0, y: 0, z: 0 }); const axisLength = Math.max(0.5, span(b) / 5);
-  ctx.fillStyle = '#40566d'; ctx.font = '700 11px sans-serif'; ctx.fillText('O (0,0,0)', origin.x + 7, origin.y + 16);
+  ctx.fillStyle = '#40566d'; ctx.font = '600 13px "Yuntong Sans", sans-serif'; ctx.fillText('O (0,0,0)', origin.x + 7, origin.y + 16);
   arrow(ctx, origin, p({ x: Math.min(axisLength, b.xMax), y: 0, z: 0 }), '#d24f55', 'X 左 / m');
   arrow(ctx, origin, p({ x: 0, y: 0, z: Math.min(axisLength, b.zMax) }), '#3979b8', 'Z 前 / m');
   if (sceneMode.value === '3d') arrow(ctx, origin, p({ x: 0, y: b.yMax, z: 0 }), '#3b9a69', 'Y 上 / m');
@@ -187,8 +187,8 @@ function draw(now: number) {
     const labelX = projected.x + (left ? -110 : 18); const labelY = projected.y - (left ? 28 : 12);
     line(ctx, projected, { x: labelX + (left ? 85 : 0), y: labelY + 2, depth: 0 }, color);
     ctx.fillStyle = color; ctx.beginPath(); ctx.arc(projected.x, projected.y, 4, 0, Math.PI * 2); ctx.fill();
-    ctx.font = '700 11px sans-serif'; ctx.fillText(cameraLabel(id, point), labelX, labelY);
-    ctx.font = '10px sans-serif'; ctx.fillText(`原点距 ${originDistance(point)} m`, labelX, labelY + 13);
+    ctx.font = '600 13px "Yuntong Sans", sans-serif'; ctx.fillText(cameraLabel(id, point), labelX, labelY);
+    ctx.font = '500 12px "Yuntong Sans", sans-serif'; ctx.fillText(`原点距 ${originDistance(point)} m`, labelX, labelY + 18);
   });
   movements.forEach(motion => {
     const { x, y, z } = pointAt(motion, now);
@@ -197,7 +197,7 @@ function draw(now: number) {
     const color = held ? '#718398' : '#1d9b72';
     line(ctx, origin, projected, color + '66');
     ctx.fillStyle = color; ctx.beginPath(); ctx.arc(projected.x, projected.y, 6, 0, Math.PI * 2); ctx.fill();
-    ctx.font = '700 11px sans-serif'; ctx.fillStyle = '#24364c';
+    ctx.font = '600 13px "Yuntong Sans", sans-serif'; ctx.fillStyle = '#24364c';
     const distance = Math.hypot(x, y, z);
     const azimuth = Math.atan2(x, z) * 180 / Math.PI;
     const elevation = Math.atan2(y, Math.hypot(x, z)) * 180 / Math.PI;
@@ -207,7 +207,7 @@ function draw(now: number) {
     const textX = Math.max(8, Math.min(projected.x + 10, width - textWidth - 8));
     const textY = Math.max(105, projected.y - 10);
     ctx.fillText(label, textX, textY);
-    ctx.fillText(detail, textX, textY + 14);
+    ctx.fillText(detail, textX, textY + 18);
   });
 }
 
@@ -233,6 +233,7 @@ onMounted(() => {
     observer.observe(canvasRef.value);
   }
   updateTargets();
+  void document.fonts.ready.then(() => { if (canvasRef.value) scheduleDraw(); });
 });
 onUnmounted(() => {
   observer?.disconnect();

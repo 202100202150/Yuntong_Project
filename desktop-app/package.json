@@ -1,24 +1,29 @@
 {
   "name": "yuntong-detection-workbench",
   "version": "0.1.1",
-  "description": "云瞳双摄像机实时无人机检测工作台",
+  "description": "云瞳 AIRSPACE 低空监测与事件管理平台",
   "author": "云瞳",
   "private": true,
   "type": "module",
-  "main": "desktop/main.cjs",
+  "main": "desktop/product-main.cjs",
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
-    "dev": "vite --config desktop/vite.config.ts",
+    "dev": "npm --prefix ../frontend run dev",
     "build": "npm run desktop:build-renderer",
-    "desktop:build-renderer": "vite build --config desktop/vite.config.ts",
+    "desktop:build-renderer": "node scripts/prepare-product.mjs --renderer-only",
     "desktop:run": "npm run desktop:build-renderer && electron .",
-    "desktop:dist": "npm run desktop:build-renderer && electron-builder --win nsis --x64",
+    "desktop:dist": "npm run desktop:prepare && electron-builder --win nsis --x64",
     "lint": "oxlint",
     "dataset:coco-person": "node training/download-coco-person.mjs",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "desktop:prepare": "node scripts/prepare-product.mjs",
+    "desktop:legacy": "vite build --config desktop/vite.config.ts && node scripts/run-legacy.mjs",
+    "desktop:pack": "npm run desktop:prepare && electron-builder --dir --win --x64",
+    "test:product-runtime": "electron tests/product-runtime-smoke.cjs",
+    "test:product-actions": "electron tests/product-actions-smoke.cjs"
   },
   "dependencies": {
     "lucide-react": "1.31.0",
@@ -40,14 +45,15 @@
   },
   "build": {
     "appId": "cn.yuntong.detectionworkbench",
-    "productName": "云瞳检测工作台",
+    "productName": "云瞳 AIRSPACE",
     "executableName": "YuntongWorkbench",
     "asar": true,
-    "asarUnpack": [
-      "desktop-dist/models/**/*"
-    ],
+    "asarUnpack": [],
     "extraResources": [
-      { "from": "models/drone.onnx", "to": "models/drone.onnx" }
+      {
+        "to": "runtime",
+        "from": "product-runtime"
+      }
     ],
     "npmRebuild": false,
     "directories": {
@@ -55,10 +61,8 @@
       "buildResources": "desktop/assets"
     },
     "files": [
-      "desktop/main.cjs",
-      "desktop/preload.cjs",
+      "desktop/product-main.cjs",
       "desktop/assets/**/*",
-      "desktop-dist/**/*",
       "package.json",
       "!node_modules/**/*"
     ],
@@ -79,7 +83,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "云瞳检测工作台",
+      "shortcutName": "云瞳 AIRSPACE",
       "deleteAppDataOnUninstall": false
     }
   }

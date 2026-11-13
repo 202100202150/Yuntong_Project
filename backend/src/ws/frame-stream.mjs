@@ -1,8 +1,16 @@
 import { WebSocketServer } from 'ws';
 import { requestCameraBridge } from '../sidecar/client.mjs';
 
-export function attachFrameStream(server) {
-  const wss = new WebSocketServer({ server, path: '/ws/frames' });
+export function attachFrameStream(server, authorize = () => false) {
+  const wss = new WebSocketServer({ noServer: true });
+  server.on('upgrade', (req, socket, head) => {
+    let validOrigin = true;
+    try { if (req.headers.origin) validOrigin = new URL(req.headers.origin).host === req.headers.host; } catch { validOrigin = false; }
+    if (!req.url?.startsWith('/ws/frames?') || !validOrigin || !authorize(req)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); socket.destroy(); return;
+    }
+    wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
+  });
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url, 'http://localhost');
     const cameraId = url.searchParams.get('cameraId');
@@ -14,6 +22,10 @@ export function attachFrameStream(server) {
     let stopped = false;
     (async () => {
       while (!stopped && ws.readyState === ws.OPEN) {
+        if (!authorize(req)) { ws.close(1008, 'session expired'); break; }
+        if (ws.bufferedAmount > 4 * 1024 * 1024) {
+          await new Promise(resolve => setTimeout(resolve, 100)); continue;
+        }
         try {
           const r = await requestCameraBridge(`/v1/cameras/${cameraId}/frame.jpg`, {
             responseType: 'buffer',
@@ -41,4 +53,5 @@ export function attachFrameStream(server) {
     })();
     ws.on('close', () => { stopped = true; });
   });
+  return wss;
 }
