@@ -1,216 +1,90 @@
-<template><section class="monitor-page">
-<div class="page-heading"><h1>实时监控</h1><div class="actions"><button class="btn" @click="captureBoth" :disabled="!auth.can('export')||!bothFramesReady||snapshotBusy" :title="!auth.can('export')?'当前账号没有抓拍权限':!bothFramesReady?'等待两路摄像机提供画面':'保存两路当前画面并提供下载'"><Camera :size="18"/>截图</button><button class="btn" @click="toggleRecording" :disabled="!auth.can('review')||recordBusy||store.recordingBusy||recordingFinishing||(!recordingActive&&!anyFramesReady)" :title="!auth.can('review')?'当前账号没有录制权限':recordingFinishing?'正在结束录像并写入文件':!recordingActive&&!anyFramesReady?'等待摄像机提供画面':recordingActive?'结束当前录像':'开始保存录像'"><Circle :size="16" :fill="status.recording?'currentColor':'none'"/>{{recordingLabel}}</button><button class="btn primary" @click="toggleDetection" :disabled="!auth.can('review')||store.detectionBusy||(!status.detecting&&!anyFramesReady)" :title="!auth.can('review')?'当前账号没有监测控制权限':!status.detecting&&!anyFramesReady?'等待摄像机提供画面':'切换监测服务状态'"><component :is="status.detecting?Pause:Play" :size="17"/>{{store.detectionBusy?'正在处理…':status.detecting?'暂停监测':'开始监测'}}</button></div></div>
-<div v-if="snapshotResults.length" class="snapshot-results" role="status"><span>本次抓拍</span><template v-for="result in snapshotResults" :key="result.cameraId"><button v-if="result.saved&&result.downloadUrl" class="btn" :disabled="snapshotDownloadBusy===result.cameraId" @click="downloadSnapshot(result)"><Download :size="16"/>下载 {{result.cameraId==='camera1'?'C1':'C2'}} 抓拍</button><span v-else class="muted">{{result.cameraId==='camera1'?'C1':'C2'}}：{{result.error||(result.queued?'等待文件写入确认':'未保存')}}</span></template><button class="icon-button" aria-label="收起抓拍结果" @click="snapshotResults=[]"><X :size="16"/></button></div>
-<div class="monitor-grid"><div class="panel space-panel" ref="card3dRef"><div class="panel-heading"><h3>空间态势</h3><div class="space-actions"><button class="view-switch" @click="relativeView=!relativeView" :title="relativeView?'查看校园底图':'查看真实米制坐标'"><component :is="relativeView?Map:Crosshair" :size="16"/>{{relativeView?'校园视图':'相对定位'}}</button><div class="mode-toggle"><button :class="{selected:mapMode==='2d'}" :aria-pressed="mapMode==='2d'" @click="changeMode('2d')">{{relativeView?'2D':'平面'}}</button><button :class="{selected:mapMode==='3d'}" :aria-pressed="mapMode==='3d'" @click="changeMode('3d')">{{relativeView?'3D':'透视'}}</button></div><button class="icon-button" title="全屏空间视图" @click="enterNativeFullscreen('3d')"><Maximize :size="17"/></button></div></div>
-<div class="target-strip"><strong v-if="primaryTarget" class="badge blue target-id">{{primaryTarget.id}}</strong><span class="badge" :class="status.detecting?'success':'neutral'"><i/>{{detectionLabel}}</span><template v-if="primaryTarget"><span class="target-field">距离 <b>{{primaryTarget.rangeMeters.toFixed(1)}}</b> m</span><span class="target-field">相对高度 <b>{{primaryTarget.y.toFixed(1)}}</b> m</span></template><span v-else class="target-placeholder">暂无定位目标</span><span class="target-count">{{totalTargets}} 个目标</span></div>
-<div class="space-canvas"><SpatialScene v-if="relativeView" ref="spatialSceneRef" :detecting="status.detecting" :spatial="status.spatial"/><CampusMap v-else ref="mapRef"/></div></div>
-<div class="panel camera-column"><div class="camera-wrapper" v-for="id in cameraIds" :key="id" :ref="el=>setCameraRef(el,id)"><CameraPanel :ref="panel=>setCameraPanelRef(id,panel)" :camera-id="id" :status="status.cameras[id]" :display-fps="getRealFps(id)" :bridge="status"/><button class="camera-fullscreen icon-button" @click="enterNativeFullscreen(id)" :aria-label="(id==='camera1'?'C1':'C2')+' 全屏视频'" title="切换视频全屏"><Maximize :size="17"/></button></div></div></div>
-<div class="monitor-bottom"><LiveTimeline :cameras="status.cameras"/><section class="panel pending-monitor"><div class="panel-heading"><h3>待复核事件 <span>{{pendingCount}}</span></h3><RouterLink to="/events" class="pending-more">查看全部 <ChevronRight :size="15"/></RouterLink></div><div v-if="pending" class="monitor-event"><div class="monitor-event-info"><strong><span class="badge blue">{{pending.trackId}}</span>目标检测</strong><time><CalendarDays :size="18"/>{{dateTime(pending.startedAt).replaceAll('/','-')}}</time></div><RouterLink :to="'/events?id='+pending.id" class="btn primary">{{auth.can('review')?'立即复核':'查看事件'}}</RouterLink></div><div v-else class="monitor-no-events"><CircleCheck :size="35" :stroke-width="1.4"/><div><strong>暂无待复核事件</strong><p>新的监测事件将自动同步至此</p></div></div></section></div>
+<template><section class="monitor-workspace" data-testid="monitor-workspace">
+<div ref="splitContainer" class="monitor-split" :class="{'single-pane':pane!=='main'}" :style="{'--split':splitRatio}">
+<section v-if="pane!=='video'" ref="scenePanel" class="monitor-panel scene-panel" data-testid="scene-panel"><header class="monitor-panel-heading"><h2>三维态势</h2><div class="scene-toolbar"><div class="segmented"><button :class="{active:mode==='3d'}" :aria-pressed="mode==='3d'" @click="changeMode('3d')">透视</button><button :class="{active:mode==='2d'}" :aria-pressed="mode==='2d'" @click="changeMode('2d')">平面</button></div><button class="monitor-icon" :title="mode==='2d'?'平面视图不提供环绕，切换透视后可用':'自动环绕观察'" aria-label="自动环绕观察" :aria-pressed="!!sceneRef?.orbiting" :disabled="!modelReady||mode==='2d'" @click="sceneRef?.toggleOrbit()"><Orbit :size="19"/></button><button class="monitor-icon" title="恢复校园全景（Home）" aria-label="恢复校园全景" :disabled="!modelReady" @click="resetSceneView"><RotateCcw :size="19"/></button><button class="monitor-icon" :title="pane==='scene'?'全屏三维视图':'独立打开三维窗口'" :aria-label="pane==='scene'?'全屏三维视图':'独立打开三维窗口'" @click="pane==='scene'?fullscreenPanel('scene'):openPane('scene')"><component :is="pane==='scene'?Maximize:ExternalLink" :size="18"/></button></div></header>
+<div class="campus-viewport"><CampusScene ref="sceneRef" :spatial="camera.status.spatial" :detecting="camera.status.detecting" :devices="monitor.devices" :scene-config="monitor.sceneConfig" :selected-camera-id="monitor.selectedCameraId" :selected-target-id="monitor.selectedTargetId" @ready="modelReady=true" @error="modelError" @configure="sceneSettingsOpen=true" @select-camera="selectCamera" @select-target="selectTarget" @focus-videos="focusVideos"/></div></section>
+<div v-if="pane==='main'" class="monitor-splitter" role="separator" tabindex="0" aria-label="调整三维和视频区域宽度" aria-orientation="vertical" :aria-valuenow="Math.round(splitRatio)" aria-valuemin="25" aria-valuemax="70" @pointerdown="startResize" @pointermove="resize" @pointerup="endResize" @pointercancel="endResize" @keydown.left.prevent="setSplit(splitRatio-2)" @keydown.right.prevent="setSplit(splitRatio+2)" @dblclick="setSplit(44.5)"><GripVertical :size="15"/></div>
+<section v-if="pane!=='scene'" ref="videoPanel" class="monitor-panel video-panel" data-testid="video-panel"><header class="monitor-panel-heading"><h2>视频监控</h2></header><div class="video-toolbar"><div class="segmented layout-options" role="group" aria-label="视频分屏"><button v-for="option in layoutOptions" :key="option.size" :class="{active:layout===option.size}" :aria-pressed="layout===option.size" @click="setLayout(option.size)">{{option.label}}</button></div><div class="video-toolbar-actions"><button class="monitor-tool" :aria-expanded="devicesOpen" @click="openDevices()"><List :size="17"/><span>设备</span></button><button v-if="pane==='main'" class="monitor-icon" title="独立打开监控窗口" aria-label="独立打开监控窗口" @click="openPane('video')"><ExternalLink :size="18"/></button><button class="monitor-icon" title="全屏视频墙" aria-label="全屏视频墙" @click="fullscreenPanel('video')"><Maximize :size="19"/></button></div></div>
+<div class="camera-grid" data-testid="camera-grid" :data-layout="layout" :style="{'--columns':columns,'--rows':rows}"><div v-for="(device,index) in slots" :key="device?.id||'empty-'+index" class="camera-slot" :data-camera-id="device?.id" :draggable="!!device" @dragstart="dragCamera=$event.dataTransfer?device?.id||'':''; $event.dataTransfer?.setData('text/plain',device?.id||'')" @dragover.prevent @drop.prevent="device&&dropCamera(device.id)">
+<LiveCameraTile v-if="device" :ref="el=>setTile(device!.id,el)" :device="device" :selected="isSelected(device.id)" :can-snapshot="auth.can('export')" :can-configure="auth.can('devices')" @select="selectCamera" @fullscreen="fullscreenCamera" @configure="openDevices" @error="message=>camera.toast(message,'error')"/>
+<button v-else class="empty-camera-slot" aria-label="选择视频通道" @click="openDevices()"><Plus :size="25" :stroke-width="1.3"/><span>选择视频通道</span></button></div></div>
+<footer class="video-pagination"><button class="monitor-icon" aria-label="上一页视频" :disabled="page===0" @click="page--"><ChevronLeft :size="18"/></button><span>第 {{page+1}} / {{totalPages}} 页</span><button class="monitor-icon" aria-label="下一页视频" :disabled="page>=totalPages-1" @click="page++"><ChevronRight :size="18"/></button><div class="pagination-spacer"/><label class="tour-control" :title="totalPages<2?'超过一页视频后可开启轮巡':'每10秒切换一页'">轮巡<button class="tour-switch" role="switch" aria-label="视频轮巡" :aria-checked="touring" :disabled="totalPages<2" @click="touring=!touring"><i/></button></label><select class="page-size" :value="layout" aria-label="每页视频数量" @change="setLayout(Number(($event.target as HTMLSelectElement).value) as VideoLayout)"><option v-for="size in layouts" :key="size" :value="size">每页 {{size}} 路</option></select></footer>
+</section></div>
+<footer class="monitor-statusbar"><span><i :class="{connected:online>0}"/>{{online>0?'视频与三维同步':monitor.error?'服务未连接':'等待视频接入'}}</span><span v-if="selectedTarget"><i class="connected"/>已选择 {{selectedTarget.id}} · C1 / C2</span><span v-else-if="monitor.selectedCameraId">{{selectedCameraLabel}}</span><span class="statusbar-right">{{monitor.devices.length}} 台相机 · {{online}} 路在线</span></footer>
+<MonitorDevices :open="devicesOpen" :hidden-ids="hiddenIds" :initial-device-id="editDeviceId" @close="devicesOpen=false" @visibility="setVisibility" @focus="focusCamera" @updated="deviceUpdated" @open-scene="devicesOpen=false;sceneSettingsOpen=true"/>
+<SceneRegistration :open="sceneSettingsOpen" @close="sceneSettingsOpen=false"/>
 </section></template>
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, nextTick, watch } from 'vue';
-import { storeToRefs } from 'pinia';
-import { Camera, Circle, Maximize, Play, Pause, Layers, Map, CircleCheck, ChevronRight, ScanLine, Crosshair, CalendarDays, Download, X } from 'lucide-vue-next';
-import { useCameraStore } from '@/stores/camera';
-import { useAuthStore } from '@/stores/auth';
-import { cameraBridge } from '@/api/camera-bridge';
-import SpatialScene from '@/components/SpatialScene.vue';
-import CampusMap from '@/components/CampusMap.vue';
-import LiveTimeline from '@/components/LiveTimeline.vue';
-import { http } from '@/api/http';
-import { dateTime, type ProductEvent } from '@/lib/product-format';
-import CameraPanel from '@/components/CameraPanel.vue';
-import type { CameraId, SnapshotResult } from '@/types/camera-types';
-import { downloadFile } from '@/lib/download-file';
-
-const store = useCameraStore();
-const auth = useAuthStore();
-const { status } = storeToRefs(store);
-const cameraIds: CameraId[] = ['camera1', 'camera2'];
-const recordBusy = ref(false);
-const mapRef = ref<InstanceType<typeof CampusMap> | null>(null);
-const relativeView = ref(false);
-const mapMode = ref<'2d'|'3d'>('3d');
-const pending = ref<ProductEvent | null>(null);
-const pendingCount = ref(0);
-let pendingTimer: ReturnType<typeof setInterval>;
-const primaryTarget = computed(() => status.value.detecting ? status.value.spatial.targets[0] : undefined);
-function changeMode(mode:'2d'|'3d'){mapMode.value=mode;mapRef.value?.switchMode(mode);spatialSceneRef.value?.switchMode(mode)}
-async function loadPending(){try{const{data}=await http.get('/overview');if(!cancelled){pending.value=data.pendingEvent||null;pendingCount.value=data.pendingEvents||0}}catch{ /* Camera monitoring remains available when the event index reconnects. */ }}
-const snapshotBusy = ref(false);
-const snapshotResults = ref<SnapshotResult[]>([]),snapshotDownloadBusy=ref('');
-async function downloadSnapshot(result:SnapshotResult){if(!result.downloadUrl)return;snapshotDownloadBusy.value=result.cameraId;try{await downloadFile(result.downloadUrl,result.name)}catch(e){store.toast((e as Error).message,'error')}finally{snapshotDownloadBusy.value=''}}
-
-const card3dRef = ref<HTMLElement | null>(null);
-const spatialSceneRef = ref<InstanceType<typeof SpatialScene> | null>(null);
-const camera1Ref = ref<HTMLElement | null>(null);
-const camera2Ref = ref<HTMLElement | null>(null);
-const cameraPanels: Partial<Record<CameraId, InstanceType<typeof CameraPanel>>> = {};
-const waitingForPair = ref(false);
-
-function setCameraPanelRef(id: CameraId, panel: unknown) {
-  if (panel) cameraPanels[id] = panel as InstanceType<typeof CameraPanel>;
-  else delete cameraPanels[id];
-}
-
-const setCameraRef = (el: unknown, id: CameraId) => {
-  if (id === 'camera1') camera1Ref.value = el as HTMLElement | null;
-  if (id === 'camera2') camera2Ref.value = el as HTMLElement | null;
-};
-
-watch(relativeView, async () => { await nextTick(); changeMode(mapMode.value); });
-
-const bothFramesReady = computed(() => cameraIds.every((id) => status.value.cameras[id].frameAvailable&&status.value.cameras[id].state==='streaming'));
-const anyFramesReady = computed(() => cameraIds.some(id=>status.value.cameras[id].frameAvailable&&status.value.cameras[id].state==='streaming'));
-const recordingStates=computed(()=>cameraIds.map(id=>status.value.cameras[id].recordingState));
-const recordingActive=computed(()=>recordingStates.value.some(state=>['armed','starting','recording','stopping'].includes(state)));
-const recordingFinishing=computed(()=>recordingStates.value.includes('stopping'));
-const recordingLabel=computed(()=>recordBusy.value||store.recordingBusy?'正在处理…':recordingFinishing.value?'正在保存…':status.value.recording?'停止录制':recordingActive.value?'取消录制':'录制');
-const detectionLabel=computed(()=>!status.value.detecting?'监测未启动':status.value.engineState==='ready'?'监测中':status.value.serviceState==='error'?'推理异常':'监测准备中');
-const totalTargets = computed(() => status.value.detecting ? status.value.spatial.targets.length : 0);
-const previewMode = computed<'pair' | CameraId | null>(() => {
-  const live = cameraIds.filter((id) => {
-    const camera = status.value.cameras[id];
-    return camera.state === 'streaming' && camera.frameAvailable;
-  });
-  return live.length === 2 ? 'pair' : live[0] ?? null;
-});
-
-const getRealFps = (id: CameraId) => {
-  const cam = status.value.cameras[id];
-  return Math.round(cam.previewFps || cam.decodeFps || 0);
-};
-
-const toggleDetection = () => store.toggleDetection();
-
-async function toggleRecording() {
-  if (!auth.can('review') || recordBusy.value || recordingFinishing.value || (!recordingActive.value&&!anyFramesReady.value)) return;
-  recordBusy.value = true;
-  try { await store.toggleRecording(); } finally { recordBusy.value = false; }
-}
-
-async function captureBoth() {
-  if (!auth.can('export') || !bothFramesReady.value || snapshotBusy.value) return;
-  snapshotBusy.value = true;
-  try { snapshotResults.value = await store.captureBoth(); } finally { snapshotBusy.value = false; }
-}
-
-async function enterNativeFullscreen(target: '3d' | CameraId) {
-  let el = target === '3d' ? card3dRef.value : target === 'camera1' ? camera1Ref.value : camera2Ref.value;
-  if (!el) return;
-  try {
-    if (!document.fullscreenElement) await el.requestFullscreen();
-    else await document.exitFullscreen();
-    nextTick(() => setTimeout(() => window.dispatchEvent(new Event('resize')), 100));
-  } catch { store.toast('当前环境拒绝全屏。', 'error'); }
-}
-
-const handleFullscreenChange = () => nextTick(() => setTimeout(() => window.dispatchEvent(new Event('resize')), 100));
-
-let cancelled = false;
-let previewRequest: AbortController | undefined;
-const singleCursor: Record<CameraId, number> = { camera1: 0, camera2: 0 };
-const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-watch(previewMode, (mode) => {
-  previewRequest?.abort();
-  waitingForPair.value = false;
-  if (mode === 'camera1' || mode === 'camera2') singleCursor[mode] = 0;
-  if (mode !== 'pair') {
-    for (const id of cameraIds) {
-      if (id !== mode) cameraPanels[id]?.clearFrame();
-    }
-  }
-});
-
-// A restarted camera service can reset the old single-camera endpoint's frame sequence.
-watch(() => cameraIds.map((id) => status.value.cameras[id].sequence), (current, previous) => {
-  cameraIds.forEach((id, index) => {
-    if (current[index] < previous[index]) {
-      singleCursor[id] = 0;
-      if (previewMode.value === id) previewRequest?.abort();
-    }
-  });
-});
-
-async function runPreview() {
-  const pairedCursor = { camera1: 0, camera2: 0 };
-  let epoch = '';
-  while (!cancelled) {
-    const mode = previewMode.value;
-    const { camera1, camera2 } = cameraPanels;
-    if (!mode || !camera1 || !camera2 || document.hidden) {
-      await delay(100);
-      continue;
-    }
-    const request = new AbortController();
-    previewRequest = request;
-    try {
-      if (mode === 'pair') {
-        const pair = await cameraBridge.getPreviewPair(pairedCursor, epoch, request.signal);
-        if (request.signal.aborted) continue;
-        if (!pair) {
-          waitingForPair.value = true;
-          await delay(20);
-          continue;
-        }
-        pairedCursor.camera1 = pair.camera1.sequence;
-        pairedCursor.camera2 = pair.camera2.sequence;
-        epoch = pair.epoch;
-        const [first, second] = await Promise.allSettled([
-          createImageBitmap(pair.camera1.jpeg),
-          createImageBitmap(pair.camera2.jpeg),
-        ]);
-        if (request.signal.aborted || first.status !== 'fulfilled' || second.status !== 'fulfilled') {
-          if (first.status === 'fulfilled') first.value.close();
-          if (second.status === 'fulfilled') second.value.close();
-          continue;
-        }
-        // Present both decoded images in the same browser task. A slow JPEG
-        // never advances one canvas while the other is still on the old pair.
-        camera1.presentFrame(first.value);
-        camera2.presentFrame(second.value);
-        waitingForPair.value = false;
-      } else {
-        const frame = await cameraBridge.getFrame(mode, singleCursor[mode], request.signal);
-        if (request.signal.aborted) continue;
-        if (!frame) {
-          await delay(20);
-          continue;
-        }
-        singleCursor[mode] = frame.sequence;
-        const bytes = new Uint8Array(frame.jpegBytes);
-        const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
-        if (request.signal.aborted) bitmap.close();
-        else {
-          pairedCursor[mode] = frame.sequence;
-          (mode === 'camera1' ? camera1 : camera2).presentFrame(bitmap);
-        }
-      }
-    } catch {
-      if (!request.signal.aborted) await delay(150);
-    } finally {
-      previewRequest = undefined;
-    }
-  }
-}
-
-onMounted(() => {
-  void runPreview();
-  void loadPending();
-  pendingTimer = setInterval(loadPending, 5000);
-  document.addEventListener('fullscreenchange', handleFullscreenChange);
-});
-
-onUnmounted(() => {
-  cancelled = true;
-  clearInterval(pendingTimer);
-  previewRequest?.abort();
-  document.removeEventListener('fullscreenchange', handleFullscreenChange);
-});
+import {computed,nextTick,onMounted,onUnmounted,ref,watch} from 'vue';
+import {useRoute} from 'vue-router';
+import {Orbit,RotateCcw,ExternalLink,Maximize,List,GripVertical,Plus,ChevronLeft,ChevronRight} from 'lucide-vue-next';
+import CampusScene from '@/components/CampusScene.vue';
+import LiveCameraTile from '@/components/LiveCameraTile.vue';
+import MonitorDevices from '@/components/MonitorDevices.vue';
+import SceneRegistration from '@/components/SceneRegistration.vue';
+import {useCameraStore} from '@/stores/camera';
+import {useMonitorStore} from '@/stores/monitor';
+import {useAuthStore} from '@/stores/auth';
+import {cameraBridge} from '@/api/camera-bridge';
+import {layouts,normalizeLayout,orderedVisibleIds,pageCount,moveCamera,type VideoLayout} from '@/lib/video-wall';
+import type {MonitorDevice} from '@/types/monitor';
+const route=useRoute(),camera=useCameraStore(),monitor=useMonitorStore(),auth=useAuthStore();
+const pane=computed<'main'|'scene'|'video'>(()=>route.query.pane==='scene'?'scene':route.query.pane==='video'?'video':'main');
+function saved<T>(key:string,fallback:T):T{try{return JSON.parse(localStorage.getItem(key)||'null')??fallback}catch{return fallback}}
+function persist(key:string,value:unknown){try{localStorage.setItem(key,JSON.stringify(value))}catch{}}
+const layout=ref<VideoLayout>(normalizeLayout(saved('yuntong.monitor.layout',9))),page=ref(0),hiddenIds=ref<string[]>(saved('yuntong.monitor.hidden',[])),order=ref<string[]>(saved('yuntong.monitor.order',[])),splitRatio=ref(Math.max(25,Math.min(70,Number(saved('yuntong.monitor.split',44.5))||44.5))),touring=ref(false),mode=ref<'2d'|'3d'>('3d');
+const devicesOpen=ref(false),editDeviceId=ref<string|null>(null),sceneSettingsOpen=ref(false),sceneRef=ref<InstanceType<typeof CampusScene>|null>(null),modelReady=ref(false),splitContainer=ref<HTMLElement|null>(null),scenePanel=ref<HTMLElement|null>(null),videoPanel=ref<HTMLElement|null>(null);
+const layoutOptions=[{size:1 as const,label:'单屏'},{size:2 as const,label:'双屏'},{size:4 as const,label:'四分屏'},{size:9 as const,label:'九分屏'},{size:16 as const,label:'十六分屏'}];
+const orderedIds=computed(()=>orderedVisibleIds(monitor.devices.map(d=>d.id),hiddenIds.value,order.value));
+const totalPages=computed(()=>pageCount(orderedIds.value.length,layout.value));
+const visibleDevices=computed(()=>orderedIds.value.slice(page.value*layout.value,(page.value+1)*layout.value).map(id=>monitor.devices.find(d=>d.id===id)!).filter(Boolean));
+const slots=computed<Array<MonitorDevice|null>>(()=>Array.from({length:layout.value},(_,i)=>visibleDevices.value[i]||null));
+const columns=computed(()=>layout.value===1||layout.value===2?1:Math.sqrt(layout.value)),rows=computed(()=>layout.value===2?2:columns.value);
+const online=computed(()=>monitor.devices.filter(d=>d.runtime?.state==='streaming'&&d.runtime?.frameAvailable).length);
+const selectedTarget=computed(()=>camera.status.detecting?camera.status.spatial.targets.find(t=>t.id===monitor.selectedTargetId):undefined);
+const selectedCameraLabel=computed(()=>{const d=monitor.devices.find(d=>d.id===monitor.selectedCameraId);return d?d.code+' · '+d.label:''});
+function setLayout(value:VideoLayout){layout.value=normalizeLayout(value);page.value=0;persist('yuntong.monitor.layout',layout.value)}
+watch(totalPages,value=>{if(page.value>=value)page.value=value-1;if(value<2)touring.value=false});
+watch(()=>camera.status.spatial.targets.map(t=>t.id).join('|'),()=>{const targets=camera.status.detecting?camera.status.spatial.targets:[];if(!targets.some(t=>t.id===monitor.selectedTargetId))monitor.selectedTargetId=targets[0]?.id||null});
+watch(()=>camera.status.detecting,value=>{if(!value)monitor.selectedTargetId=null});
+function selectCamera(id:string){monitor.selectedCameraId=id}
+function selectTarget(id:string){monitor.selectedTargetId=id}
+function isSelected(id:string){return monitor.selectedCameraId===id||!!selectedTarget.value&&['camera1','camera2'].includes(id)}
+function focusCamera(id:string){setVisibility(id,true);monitor.selectedCameraId=id;page.value=Math.max(0,Math.floor(orderedIds.value.indexOf(id)/layout.value));devicesOpen.value=false}
+function focusVideos(ids:string[]){if(pane.value==='scene'){persist('yuntong.monitor.pendingFocus',{ids,at:Date.now()});openPane('video');broadcast?.postMessage({sender,type:'focus-videos',ids});return}const existing=ids.filter(id=>monitor.devices.some(d=>d.id===id));if(!existing.length)return;hiddenIds.value=hiddenIds.value.filter(id=>!existing.includes(id));order.value=[...existing,...orderedIds.value.filter(id=>!existing.includes(id))];persist('yuntong.monitor.order',order.value);persist('yuntong.monitor.hidden',hiddenIds.value);setLayout(existing.length>1?2:1);monitor.selectedCameraId=existing[0]}
+function setVisibility(id:string,visible:boolean){hiddenIds.value=visible?hiddenIds.value.filter(value=>value!==id):[...new Set([...hiddenIds.value,id])];persist('yuntong.monitor.hidden',hiddenIds.value)}
+function openDevices(id?:string){editDeviceId.value=id||null;devicesOpen.value=true}
+let dragCamera='';
+function dropCamera(target:string){if(!dragCamera||dragCamera===target)return;order.value=moveCamera(orderedIds.value,dragCamera,target);persist('yuntong.monitor.order',order.value);dragCamera=''}
+function changeMode(value:'2d'|'3d'){mode.value=value;sceneRef.value?.switchMode(value)}
+function resetSceneView(){if(sceneRef.value?.resetView())camera.toast('校园全景已恢复','success')}
+function modelError(message:string){modelReady.value=false;camera.toast(message,'error')}
+function openPane(value:'scene'|'video'){const url=new URL('/workbench',location.origin);url.searchParams.set('pane',value);const child=window.open(url.href,'yuntong-'+value,'popup,width=1440,height=960');if(!child&&!window.yuntongDesktop)camera.toast('窗口被浏览器拦截，请允许本站弹出窗口后重试。','error');else child?.focus()}
+async function fullscreenPanel(value:'scene'|'video'){const element=value==='scene'?scenePanel.value:videoPanel.value;try{if(document.fullscreenElement)await document.exitFullscreen();else await element?.requestFullscreen()}catch{camera.toast('当前环境拒绝全屏，请检查窗口权限。','error')}}
+async function fullscreenCamera(id:string){const element=videoPanel.value?.querySelector<HTMLElement>('[data-camera-id="'+CSS.escape(id)+'"] .live-tile');try{if(document.fullscreenElement)await document.exitFullscreen();else await element?.requestFullscreen()}catch{camera.toast('当前环境拒绝全屏。','error')}}
+let resizing=false;
+function setSplit(value:number){splitRatio.value=Math.max(25,Math.min(70,value));persist('yuntong.monitor.split',splitRatio.value)}
+function startResize(event:PointerEvent){resizing=true;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);event.preventDefault()}
+function resize(event:PointerEvent){if(!resizing)return;const rect=splitContainer.value?.getBoundingClientRect();if(rect)setSplit((event.clientX-rect.left)/rect.width*100)}
+function endResize(){resizing=false}
+const tileRefs=new Map<string,InstanceType<typeof LiveCameraTile>>();
+function setTile(id:string,value:unknown){if(value)tileRefs.set(id,value as InstanceType<typeof LiveCameraTile>);else tileRefs.delete(id)}
+const apiBase=(import.meta.env.VITE_API_BASE as string)||'/api';
+let controllers:AbortController[]=[],streamGeneration=0,disposed=false;
+function wait(milliseconds:number,signal:AbortSignal){return new Promise<void>(resolve=>{if(signal.aborted){resolve();return}const finish=()=>{clearTimeout(timer);signal.removeEventListener('abort',finish);resolve()},timer=setTimeout(finish,milliseconds);signal.addEventListener('abort',finish,{once:true})})}
+async function singleStream(id:string,signal:AbortSignal){let sequence=0;while(!signal.aborted){if(document.hidden){await wait(250,signal);continue}try{const response=await fetch(apiBase+'/monitor/cameras/'+encodeURIComponent(id)+'/frame.jpg?afterSequence='+sequence,{cache:'no-store',credentials:'same-origin',signal});if(response.status===401){window.dispatchEvent(new Event('yuntong:session-expired'));return}if(response.status===204){await wait(65,signal);continue}if(!response.ok){let reason='视频源暂不可用';try{reason=(await response.json()).error||reason}catch{}throw new Error(reason)}const nextSequence=Number(response.headers.get('X-Frame-Sequence'))||0,receivedAt=Number(response.headers.get('X-Frame-Received-At'))||Date.now(),blob=await response.blob();const bitmap=await createImageBitmap(blob);if(signal.aborted||!tileRefs.has(id)){bitmap.close();return}sequence=nextSequence;tileRefs.get(id)!.presentFrame(bitmap,receivedAt);await wait(35,signal)}catch(error){if(signal.aborted)return;tileRefs.get(id)?.setFailure((error as Error).message);await wait(1000,signal)}}}
+async function pairStream(signal:AbortSignal){const cursor={camera1:0,camera2:0};let epoch='';while(!signal.aborted){if(document.hidden){await wait(250,signal);continue}try{const requestedAt=Date.now();const pair=await cameraBridge.getPreviewPair(cursor,epoch,signal);if(signal.aborted)return;if(Date.now()-requestedAt>4000)throw new Error('视频传输延迟过高，正在重新同步');if(!pair){await wait(35,signal);continue}const decoded=await Promise.allSettled([createImageBitmap(pair.camera1.jpeg),createImageBitmap(pair.camera2.jpeg)]);if(signal.aborted||decoded.some(result=>result.status!=='fulfilled')){decoded.forEach(result=>{if(result.status==='fulfilled')result.value.close()});continue}cursor.camera1=pair.camera1.sequence;cursor.camera2=pair.camera2.sequence;epoch=pair.epoch;decoded.forEach((result,index)=>{if(result.status!=='fulfilled')return;const tile=tileRefs.get(index?'camera2':'camera1');if(tile)tile.presentFrame(result.value);else result.value.close()});await wait(30,signal)}catch(error){if(signal.aborted)return;for(const id of ['camera1','camera2'])tileRefs.get(id)?.setFailure((error as Error).message);await wait(500,signal)}}}
+const paired=computed(()=>visibleDevices.value.some(d=>d.id==='camera1')&&visibleDevices.value.some(d=>d.id==='camera2')&&camera.status.cameras.camera1.state==='streaming'&&camera.status.cameras.camera2.state==='streaming'&&camera.status.cameras.camera1.frameAvailable&&camera.status.cameras.camera2.frameAvailable);
+async function restartStreams(){const generation=++streamGeneration;controllers.forEach(controller=>controller.abort());controllers=[];await nextTick();if(disposed||generation!==streamGeneration||pane.value==='scene')return;if(paired.value){const controller=new AbortController();controllers.push(controller);void pairStream(controller.signal)}for(const device of visibleDevices.value){if(paired.value&&['camera1','camera2'].includes(device.id))continue;if(!device.host)continue;const controller=new AbortController();controllers.push(controller);void singleStream(device.id,controller.signal)}}
+const sourceKeys=new Map<string,string>();
+watch(()=>pane.value+'|'+visibleDevices.value.map(d=>[d.id,d.host,d.port,d.username,d.channel,d.stream,d.path].join(':')).join('|')+'|'+paired.value,()=>{for(const device of visibleDevices.value){const key=[device.host,device.port,device.username,device.channel,device.stream,device.path].join(':');if(sourceKeys.has(device.id)&&sourceKeys.get(device.id)!==key)tileRefs.get(device.id)?.clearFrame();sourceKeys.set(device.id,key)}void restartStreams()},{immediate:true,flush:'post'});
+watch(()=>monitor.devices.map(d=>({id:d.id,sequence:d.runtime?.sequence||0})),(current,previous)=>{const reset=current.filter(item=>{const old=previous?.find(p=>p.id===item.id);return old&&item.sequence<old.sequence});if(reset.length){reset.forEach(item=>tileRefs.get(item.id)?.clearFrame());void restartStreams()}});
+function deviceUpdated(id:string,broadcastChange=true){tileRefs.get(id)?.clearFrame();void restartStreams();if(broadcastChange)broadcast?.postMessage({sender,type:'device-updated',id})}
+let tourTimer:ReturnType<typeof setInterval>|undefined,broadcast:BroadcastChannel|undefined;
+const sender=globalThis.crypto?.randomUUID?.()??Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
+function consumePendingFocus(){if(pane.value!=='video'||!monitor.loaded)return;const pending=saved<{ids:string[];at:number}|null>('yuntong.monitor.pendingFocus',null);if(pending&&Date.now()-pending.at<15000&&Array.isArray(pending.ids)){focusVideos(pending.ids.filter(id=>typeof id==='string'));try{localStorage.removeItem('yuntong.monitor.pendingFocus')}catch{}}}
+onMounted(()=>{tourTimer=setInterval(()=>{if(touring.value&&totalPages.value>1&&!document.hidden)page.value=(page.value+1)%totalPages.value},10000);if('BroadcastChannel'in window){broadcast=new BroadcastChannel('yuntong-monitor-selection');broadcast.onmessage=event=>{const data=event.data;if(!data||data.sender===sender)return;if(data.type==='selection'){if(typeof data.cameraId==='string'||data.cameraId===null)monitor.selectedCameraId=data.cameraId;if(typeof data.targetId==='string'||data.targetId===null)monitor.selectedTargetId=data.targetId}else if(data.type==='request-selection'&&pane.value==='main'){broadcast?.postMessage({sender,type:'selection',cameraId:monitor.selectedCameraId,targetId:monitor.selectedTargetId})}else if(data.type==='focus-videos'&&pane.value==='video'&&Array.isArray(data.ids)){focusVideos(data.ids.filter((id:unknown)=>typeof id==='string'))}else if(data.type==='device-updated'&&typeof data.id==='string'){void monitor.refresh().then(()=>deviceUpdated(data.id,false))}else if(data.type==='scene-config')void monitor.loadSceneConfig().catch(()=>{})};broadcast.postMessage({sender,type:'request-selection'})}consumePendingFocus()});
+watch(()=>monitor.loaded,consumePendingFocus);
+watch(()=>[monitor.selectedCameraId,monitor.selectedTargetId],()=>broadcast?.postMessage({sender,type:'selection',cameraId:monitor.selectedCameraId,targetId:monitor.selectedTargetId}));
+watch(()=>JSON.stringify(monitor.sceneConfig),()=>broadcast?.postMessage({sender,type:'scene-config'}));
+onUnmounted(()=>{disposed=true;streamGeneration++;controllers.forEach(controller=>controller.abort());clearInterval(tourTimer);broadcast?.close()});
 </script>
-<style scoped>
-.snapshot-results{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;margin-bottom:10px;border:1px solid #cddced;border-radius:8px;background:#f7faff;font-size:14px}.snapshot-results>.icon-button{margin-left:auto}.snapshot-results .btn{font-size:14px;min-height:34px}
-.monitor-page>.page-heading .actions{gap:15px}.monitor-page>.page-heading .actions .btn{font-size:18px;min-width:104px;min-height:40px}.monitor-page>.page-heading .actions .btn:last-child{min-width:138px}.monitor-grid{display:grid;grid-template-columns:minmax(0,1.435fr) minmax(360px,1fr);gap:8px;height:574px;min-height:440px}.space-panel{position:relative;display:flex;flex-direction:column;overflow:hidden;padding:0 12px 12px}.space-panel .panel-heading{padding:10px 4px 9px;min-height:53px;height:53px}.space-panel h3{margin:0;font-size:24px;font-weight:700}.space-actions{display:flex;align-items:center;gap:9px}.view-switch{display:flex;align-items:center;gap:5px;background:none;border:0;color:#8192ad;font-size:12px;padding:5px}.view-switch:hover{color:var(--blue)}.mode-toggle{position:absolute;right:24px;top:123px;z-index:3;display:flex;border:3px solid #fff;border-radius:8px;height:35px;overflow:hidden;box-shadow:0 2px 6px #253a5210}.mode-toggle button{border:0;background:#fff;color:#536783;padding:3px 13px;font-size:16px;font-weight:500}.mode-toggle button.selected{background:var(--blue);color:#fff;border-radius:5px}.space-actions .icon-button{width:28px;height:28px}.target-strip{display:flex;align-items:center;gap:17px;height:46px;flex-shrink:0;border:1px solid #e4eaf4;background:#f7f9fd;border-radius:7px;margin-bottom:10px;padding:0 12px;font-size:17px;color:#18253c}.target-strip>.badge{font-size:16px;padding:4px 10px}.target-strip>.target-id{min-width:80px;justify-content:center;font-size:18px}.target-strip strong{font-size:18px;font-weight:600}.target-strip b{color:#172033;font-weight:600}.target-field{border-left:1px solid #b9c8df;padding-left:20px;white-space:nowrap}.target-count{font-size:13px;margin-left:auto;color:#9aa8bb;white-space:nowrap}.target-placeholder{font-size:16px;color:#74839b}.space-canvas{flex:1;position:relative;min-height:0;border-radius:7px;overflow:hidden}.camera-column{display:grid;grid-template-rows:1fr 1fr;gap:14px;min-height:0;padding:11px 12px}.camera-wrapper{position:relative;min-height:0;overflow:hidden;border-radius:10px;border:1px solid #d6deeb}.camera-fullscreen{position:absolute;z-index:5;bottom:6px;right:10px;color:white;width:30px;height:30px}.camera-fullscreen svg{width:23px;height:23px}.camera-fullscreen:hover{background:#ffffff25;color:#fff}.monitor-bottom{display:grid;grid-template-columns:minmax(0,2.18fr) minmax(310px,1fr);gap:10px;margin-top:10px;height:206px}.pending-monitor{overflow:hidden}.pending-monitor .panel-heading{height:65px;padding:15px 20px}.pending-monitor h3{font-size:19px;font-weight:700}.pending-monitor h3>span{font-size:17px;color:#59667a;margin-left:6px;font-weight:600}.pending-more{font-size:13px;color:#6d7b92;display:flex;align-items:center;white-space:nowrap}.monitor-event{display:flex;align-items:center;gap:14px;margin:0 16px;padding:15px 13px;background:#fbfcff;border:1px solid #d4deee;border-radius:9px;min-height:108px}.monitor-event-info{min-width:0;flex:1}.monitor-event-info strong{font-size:17px;font-weight:600;white-space:nowrap;display:flex;align-items:center;gap:13px}.monitor-event-info .badge{font-size:17px;padding:3px 9px}.monitor-event-info time{display:flex;gap:12px;align-items:center;font-size:15px;color:#35445e;margin-top:15px;white-space:nowrap}.monitor-event>.btn{margin-left:auto;font-size:16px;min-height:36px;padding:5px 13px}.monitor-no-events{display:flex;align-items:center;justify-content:center;gap:17px;padding:35px 20px;color:#a2b2c6}.monitor-no-events strong{font-size:17px;color:#72859e;font-weight:500}.monitor-no-events p{margin:10px 0 0;font-size:14px;color:#9aa9bd}.space-panel:fullscreen,.camera-wrapper:fullscreen{width:100vw;height:100vh;background:#fff}.space-panel:fullscreen .space-canvas{height:100%}
-@media(min-height:1000px) and (min-width:1300px){.monitor-grid{height:calc(100dvh - 368px)}}@media(max-width:1350px){.target-placeholder,.target-count{display:none}.monitor-event{gap:10px}.monitor-event-info strong{font-size:15px}.monitor-event-info time{font-size:12px}.monitor-event>.btn{font-size:14px;padding:5px 9px}.monitor-event-info p{font-size:12px}.space-actions{gap:4px}.monitor-grid{grid-template-columns:minmax(0,1.3fr) minmax(330px,1fr)}}@media(max-width:1100px){.monitor-grid{grid-template-columns:1fr;height:auto;min-height:0}.space-panel{height:520px}.camera-column{grid-template-columns:1fr 1fr;grid-template-rows:260px}.monitor-bottom{grid-template-columns:1fr;height:auto}.pending-monitor{min-height:200px}.monitor-bottom>.live-timeline{height:206px}.monitor-event>.btn{position:static}.monitor-event{min-height:120px}}@media(max-width:700px){.camera-column{grid-template-columns:1fr;grid-template-rows:240px 240px}.space-panel{height:430px;padding:0 8px 8px}.target-strip{gap:10px;padding:0 8px;font-size:12px}.target-strip strong{font-size:14px}.target-strip>.badge{font-size:11px}.view-switch{font-size:0}.space-panel .panel-heading h3{font-size:20px}.monitor-page .actions{width:100%;justify-content:flex-end}.mode-toggle button{padding:3px 8px}}
-</style>

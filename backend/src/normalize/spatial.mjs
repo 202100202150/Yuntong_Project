@@ -1,19 +1,22 @@
 const states = new Set(['uncalibrated', 'ready', 'waiting_for_frames', 'frame_time_gap', 'no_targets', 'no_valid_matches', 'error']);
 const numeric = (value) => typeof value === 'number' && Number.isFinite(value);
-const point = (value, fallback) => value && [value.x, value.y, value.z].every(numeric)
-  ? { x: value.x, y: value.y, z: value.z } : fallback;
+const point = (value) => value && typeof value === 'object' && !Array.isArray(value) && [value.x, value.y, value.z].every(numeric)
+  ? { x: value.x, y: value.y, z: value.z } : null;
 
 export function normalizeSpatial(value) {
   const source = value && typeof value === 'object' ? value : {};
   const state = states.has(source.state) ? source.state : 'uncalibrated';
+  // A missing calibration point is unknown, not a default stereo baseline.
+  // Omitting it also lets the viewer use an explicitly entered site coordinate.
+  const cameras = Object.fromEntries(['camera1', 'camera2'].flatMap(id => {
+    const position = point(source.cameras?.[id]);
+    return position ? [[id, position]] : [];
+  }));
   return {
     state,
     message: typeof source.message === 'string' ? source.message.slice(0, 300) : '请先完成双摄标定，再显示米制无人机位置。',
     units: 'm',
-    cameras: {
-      camera1: point(source.cameras?.camera1, { x: -0.305, y: 0, z: 0 }),
-      camera2: point(source.cameras?.camera2, { x: 0.305, y: 0, z: 0 }),
-    },
+    cameras,
     targets: state === 'ready' && Array.isArray(source.targets) ? source.targets.slice(0, 256).flatMap((item) => {
       if (!item || item.class !== 'drone' || ![item.x, item.y, item.z, item.rangeMeters, item.reprojectionErrorPx, item.frameSkewMs].every(numeric)
         || item.rangeMeters < 0 || item.reprojectionErrorPx < 0 || item.frameSkewMs < 0

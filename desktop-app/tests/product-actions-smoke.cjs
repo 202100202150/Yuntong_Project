@@ -15,7 +15,7 @@ process.env.YUNTONG_CAMERA_PROJECT_DIR = path.join(runDirectory, 'no-camera-proj
 process.env.YUNTONG_CAMERA_PYTHON = path.join(runDirectory, 'no-python.exe');
 const checks = [], errorDialogs = [], recoveryDialogs = [];
 let recoveryResponse = 0, productWindow, origin, closing = false, failed = false;
-const timeout = setTimeout(() => fail(new Error('Desktop actions smoke timed out')), 60000);
+const timeout = setTimeout(() => fail(new Error('Desktop actions smoke timed out')), 90000);
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 dialog.showErrorBox = (title, content) => { errorDialogs.push({ title, content }); };
 dialog.showMessageBox = async (_window, options) => {
@@ -52,8 +52,10 @@ async function download(filename, destination) {
   return completed;
 }
 app.on('browser-window-created', (_event, window) => {
+  if (productWindow) { window.show = () => {}; return; }
   productWindow = window;
   window.show = () => {}; // Keep this independent test window hidden.
+  window.webContents.setBackgroundThrottling(false);
   window.webContents.once('did-finish-load', () => run().catch(fail));
 });
 app.on('will-quit', event => {
@@ -61,20 +63,99 @@ app.on('will-quit', event => {
   event.preventDefault();
   (async () => {
     await assert.rejects(fetch(origin + '/api/auth/status', { signal: AbortSignal.timeout(1500) }));
+    assert.equal(BrowserWindow.getAllWindows().length, 0, 'main shutdown left a pane window alive');
     checks.push({ name: 'close-recovery-action-stops-local-backend-and-exits', passed: true });
     clearTimeout(timeout);
-    console.log(JSON.stringify({ ok: true, productionMain: 'desktop/product-main.cjs', runDirectory, checks, recoveredCrashes: recoveryDialogs.length, downloadErrorDialogs: errorDialogs.length }, null, 2));
+    console.log(JSON.stringify({ ok: true, productionMain: 'desktop/product-main.cjs', runDirectory, checks, recoveredCrashes: recoveryDialogs.length, errorDialogTitles: errorDialogs.map(item=>item.title) }, null, 2));
     app.exit(0);
   })().catch(fail);
 });
 async function run() {
   origin = new URL(productWindow.webContents.getURL()).origin;
-  await productWindow.webContents.executeJavaScript('document.fonts.ready');
+  await productWindow.webContents.executeJavaScript('document.fonts.ready.then(()=>true)');
   assert.equal(await productWindow.webContents.executeJavaScript('typeof require'), 'undefined');
   const password = randomBytes(20).toString('hex');
   const setupStatus = await productWindow.webContents.executeJavaScript(`fetch('/api/auth/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'actionsadmin',displayName:'桌面验收',password:${JSON.stringify(password)}})}).then(response=>response.status)`);
   assert.equal(setupStatus, 201);
   checks.push({ name: 'actual-product-entry-creates-isolated-administrator', passed: true });
+  await productWindow.loadURL(origin + '/workbench');
+  await until(async () => await productWindow.webContents.executeJavaScript('Boolean(document.querySelector(\'[data-testid="monitor-workspace"]\') && document.querySelector(\'[aria-label="最大化窗口"]\'))'), 'monitoring page/native titlebar did not render');
+  if (process.env.YUNTONG_ACTIONS_OUTPUT) {
+    const visibleModel = await productWindow.webContents.executeJavaScript(`(async()=>{
+      const started=Date.now();
+      while(Date.now()-started<45000){
+        if(document.querySelector('[data-testid="campus-scene"]')?.getAttribute('data-ready')==='true'){
+          await document.fonts.ready;
+          await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+          await new Promise(resolve=>setTimeout(resolve,500));
+          return true;
+        }
+        await new Promise(resolve=>setTimeout(resolve,100));
+      }
+      return false;
+    })()`);
+    assert.equal(visibleModel, true, 'production desktop did not load local campus scene');
+    fs.mkdirSync(process.env.YUNTONG_ACTIONS_OUTPUT, {recursive:true});
+    fs.writeFileSync(path.join(process.env.YUNTONG_ACTIONS_OUTPUT,'electron-native-monitoring.png'), (await productWindow.webContents.capturePage()).toPNG());
+    checks.push({ name:'production-titlebar-and-local-campus-visible-in-native-window',passed:true });
+  }
+
+  const desktopApi = await productWindow.webContents.executeJavaScript(`(async()=>({
+    methods:Object.keys(window.yuntongDesktop).sort(),
+    state:await window.yuntongDesktop.windowState(),
+    requireType:typeof require,
+    processType:typeof process,
+  }))()`);
+  assert.deepEqual(desktopApi.methods, ['close','maximize','minimize','onWindowState','platform','windowState']);
+  assert.equal(desktopApi.requireType, 'undefined');
+  assert.equal(desktopApi.processType, 'undefined');
+  assert.equal(desktopApi.state.pane, 'main');
+  assert.equal(productWindow.getNativeWindowHandle().length > 0, true);
+  await productWindow.webContents.executeJavaScript('window.nativeStates=[]; window.removeStateListener=window.yuntongDesktop.onWindowState(s=>window.nativeStates.push(s)); void 0');
+  await productWindow.webContents.executeJavaScript('document.querySelector(\'[aria-label="最大化窗口"]\').click()');
+  await until(() => productWindow.isMaximized(), 'maximize did not change native window');
+  await until(async () => await productWindow.webContents.executeJavaScript('Boolean(document.querySelector(\'[aria-label="还原窗口"]\'))'), 'titlebar did not react to real maximize event');
+  await productWindow.webContents.executeJavaScript('document.querySelector(\'[aria-label="还原窗口"]\').click()');
+  await until(() => !productWindow.isMaximized(), 'maximize toggle did not restore native window');
+  await productWindow.webContents.executeJavaScript('document.querySelector(\'[aria-label="最小化窗口"]\').click()');
+  await until(() => productWindow.isMinimized(), 'minimize did not change native window');
+  productWindow.restore();
+  await until(async () => (await productWindow.webContents.executeJavaScript('window.nativeStates')).some(s=>s.minimized), 'native state notifications were not received');
+  await productWindow.webContents.executeJavaScript('window.removeStateListener()');
+  checks.push({ name: 'sandboxed-preload-controls-real-native-window-and-notifies-state', passed: true });
+  await productWindow.webContents.executeJavaScript('document.querySelector(\'[aria-label="全屏视频墙"]\').click()', true);
+  await until(async () => await productWindow.webContents.executeJavaScript('document.fullscreenElement?.getAttribute("data-testid")==="video-panel"'), 'video-wall button did not enter actual fullscreen');
+  await productWindow.webContents.executeJavaScript('document.querySelector(\'[aria-label="全屏视频墙"]\').click()', true);
+  await until(async () => !await productWindow.webContents.executeJavaScript('Boolean(document.fullscreenElement)'), 'video-wall button did not exit actual fullscreen');
+  checks.push({ name: 'page-fullscreen-action-enters-and-exits-real-fullscreen', passed: true });
+
+  for (const pane of ['scene','video']) {
+    const created = once(productWindow.webContents, 'did-create-window');
+    await productWindow.webContents.executeJavaScript(`Boolean(window.open('/workbench?pane=${pane}','smoke-${pane}','width=900,height=700'))`);
+    const [child] = await created;
+    await until(() => child.webContents.getURL().includes('/workbench'), 'child window did not load');
+    await until(async () => await child.webContents.executeJavaScript('typeof window.yuntongDesktop === "object" && Boolean(document.querySelector(\'[aria-label="关闭窗口"]\'))').catch(()=>false), 'child titlebar did not load');
+    const childState = await child.webContents.executeJavaScript('window.yuntongDesktop.windowState()');
+    assert.equal(childState.pane, pane);
+    assert.equal(child.getParentWindow(), productWindow);
+    assert.equal(await child.webContents.executeJavaScript('typeof require'), 'undefined');
+    assert.equal(await child.webContents.executeJavaScript("fetch('/api/auth/status').then(r=>r.json()).then(s=>s.user?.username)"), 'actionsadmin');
+    const countBefore = BrowserWindow.getAllWindows().length;
+    await productWindow.webContents.executeJavaScript(`Boolean(window.open('/workbench?pane=${pane}','duplicate-${pane}'))`);
+    await delay(100);
+    assert.equal(BrowserWindow.getAllWindows().length, countBefore);
+    const closed = once(child, 'closed');
+    await child.webContents.executeJavaScript('document.querySelector(\'[aria-label="关闭窗口"]\').click()').catch(()=>{});
+    await closed;
+    assert.equal(productWindow.isDestroyed(), false);
+  }
+  for (const url of ['/devices?pane=scene','/workbench?pane=invalid','/workbench?pane=scene&redirect=evil']) {
+    const countBefore = BrowserWindow.getAllWindows().length;
+    await productWindow.webContents.executeJavaScript(`window.open(${JSON.stringify(url)})`);
+    await delay(50);
+    assert.equal(BrowserWindow.getAllWindows().length, countBefore);
+  }
+  checks.push({ name: 'only-two-same-origin-panes-open-with-shared-auth-deduplication-and-working-close', passed: true });
 
   productWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Alt' });
   productWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Alt' });
@@ -104,12 +185,21 @@ async function run() {
   assert.match(errorDialogs[0].title, /保存失败/);
   checks.push({ name: 'interrupted-file-save-displays-actionable-error', passed: true });
 
+  const lastPaneCreated = once(productWindow.webContents, 'did-create-window');
+  await productWindow.webContents.executeJavaScript("Boolean(window.open('/workbench?pane=scene','lifecycle-scene'))");
+  const [lifecyclePane] = await lastPaneCreated;
+  await until(() => lifecyclePane.webContents.getURL().includes('/workbench'), 'lifecycle pane did not open');
+
   const reloaded = once(productWindow.webContents, 'did-finish-load');
   productWindow.webContents.forcefullyCrashRenderer();
   await reloaded;
-  await until(() => recoveryDialogs.length === 1, 'Renderer crash did not offer recovery');
+  // Chromium may share a renderer process between same-origin parent and pane;
+  // both native windows can consequently report the deliberately induced crash.
+  await until(() => recoveryDialogs.length >= 1, 'Renderer crash did not offer recovery');
   assert.deepEqual(recoveryDialogs[0].buttons, ['重新加载', '关闭应用']);
   assert.equal(await productWindow.webContents.executeJavaScript("fetch('/api/auth/status').then(r=>r.json()).then(s=>s.user?.username)"), 'actionsadmin');
+  assert.equal(lifecyclePane.isDestroyed(), false, 'a main-page reload unexpectedly closed the separated pane');
+  await until(async () => !lifecyclePane.webContents.isLoadingMainFrame() && await lifecyclePane.webContents.executeJavaScript('typeof window.yuntongDesktop === "object"').catch(()=>false), 'separated pane did not recover after shared renderer crash');
   checks.push({ name: 'renderer-crash-reload-restores-real-page-and-session', passed: true });
 
   recoveryResponse = 1; closing = true;

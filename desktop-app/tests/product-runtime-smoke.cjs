@@ -12,7 +12,7 @@ app.setPath('userData', path.join(runDirectory, 'profile'));
 let backend;
 let window;
 let finished = false;
-const timeout = setTimeout(() => finish(new Error('Electron smoke test timed out')), 45000);
+const timeout = setTimeout(() => finish(new Error('Electron smoke test timed out')), 180000);
 async function finish(error) {
   if (finished) return;
   finished = true;
@@ -33,11 +33,19 @@ app.whenReady().then(async () => {
   window = new BrowserWindow({
     show: false, width: 1672, height: 941, useContentSize: true,
     autoHideMenuBar: true,
-    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   });
   window.setMenu(null);
   window.setContentSize(1672, 941);
   const errors = [];
+  const externalRequests = [];
+  const origin = new URL(backend.url).origin;
+  window.webContents.session.webRequest.onBeforeRequest((details, callback) => {
+    const parsed = new URL(details.url);
+    const local = parsed.origin === origin || parsed.origin === origin.replace('http:', 'ws:') || ['data:','blob:','devtools:'].includes(parsed.protocol);
+    if (!local) externalRequests.push(details.url);
+    callback({ cancel: !local });
+  });
   window.webContents.on('console-message', event => { if (event.level === 'error') errors.push(event.message); });
   await window.loadURL(backend.url);
   await new Promise(resolve => setTimeout(resolve, 1200));
@@ -68,11 +76,32 @@ app.whenReady().then(async () => {
   assert.equal(setup.status, 201);
   assert.equal(setup.session.user.username, 'smokeadmin');
   assert.ok(setup.session.user.permissions.includes('devices'));
-  await window.loadURL(new URL('/home', backend.url).href);
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  await window.loadURL(new URL('/workbench', backend.url).href);
+  const sceneReady = await window.webContents.executeJavaScript(`(async()=>{
+    const started=Date.now();
+    while(Date.now()-started<120000){
+      const scene=document.querySelector('[data-testid="campus-scene"]');
+      if(scene?.getAttribute('data-ready')==='true'){
+        await document.fonts.ready;
+        await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+        await new Promise(resolve=>setTimeout(resolve,1000));
+        return {ready:true,canvas:{width:scene.querySelector('canvas')?.width,height:scene.querySelector('canvas')?.height},text:scene.innerText,modelResources:performance.getEntriesByType('resource').filter(r=>/models\\//.test(r.name)).map(r=>({url:r.name,bytes:r.transferSize}))};
+      }
+      await new Promise(resolve=>setTimeout(resolve,250));
+    }
+    return {ready:false,text:document.body.innerText};
+  })()`);
+  assert.equal(sceneReady.ready, true, 'local 3D model did not load: '+JSON.stringify(sceneReady));
+  assert.ok(sceneReady.canvas.width > 100 && sceneReady.canvas.height > 100, '3D canvas was not sized for rendering');
+  assert.ok(!sceneReady.text.includes('正在载入校园模型'), 'model loading layer was not dismissed');
+  assert.ok(sceneReady.modelResources.length > 0, '3D scene did not request any local model resources');
+  assert.ok(sceneReady.modelResources.every(resource => new URL(resource.url).origin === origin));
   const dashboard = await window.webContents.executeJavaScript('document.body.innerText');
-  fs.writeFileSync(path.join(outputDirectory, 'electron-overview.png'), (await window.webContents.capturePage()).toPNG());
-  assert.ok(dashboard.includes('运行总览'), 'authenticated overview was not rendered: ' + JSON.stringify({text:dashboard.slice(0,1500),errors}));
-  console.log(JSON.stringify({ ok:true, electron:process.versions.electron, node:process.versions.node, sandbox:true, sqlite:true, sameOriginSession:true, viewport:first.viewport, runtimeRoot, screenshotDirectory:outputDirectory, consoleErrors:errors }, null, 2));
+  fs.writeFileSync(path.join(outputDirectory, 'electron-monitoring.png'), (await window.webContents.capturePage()).toPNG());
+  assert.ok(dashboard.includes('三维态势') && dashboard.includes('视频监控'), 'authenticated dual-pane monitor was not rendered: ' + JSON.stringify({text:dashboard.slice(0,1500),errors}));
+  const panels = await window.webContents.executeJavaScript(`['monitor-workspace','scene-panel','video-panel','camera-grid'].every(id=>document.querySelector('[data-testid="'+id+'"]'))`);
+  assert.equal(panels, true, 'required monitoring panels are missing');
+  assert.deepEqual(externalRequests, [], 'the desktop renderer requested external model/runtime assets');
+  console.log(JSON.stringify({ ok:true, electron:process.versions.electron, node:process.versions.node, sandbox:true, sqlite:true, sameOriginSession:true, viewport:first.viewport, runtimeRoot, model:sceneReady, screenshotDirectory:outputDirectory, consoleErrors:errors, externalRequests }, null, 2));
   await finish();
 }).catch(finish);

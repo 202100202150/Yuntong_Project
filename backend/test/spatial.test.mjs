@@ -12,6 +12,25 @@ test('no calibration or service error cannot create metric targets', () => {
   assert.equal(normalizeSpatial({ state: 'error', targets: [target] }).targets.length, 0);
 });
 
+test('missing camera calibration never invents a baseline in any spatial state', () => {
+  assert.deepEqual(normalizeSpatial(null).cameras, {});
+  for (const state of ['uncalibrated', 'ready', 'waiting_for_frames', 'frame_time_gap', 'no_targets', 'no_valid_matches', 'error']) {
+    assert.deepEqual(normalizeSpatial({ state }).cameras, {});
+    assert.deepEqual(normalizeSpatial({ state, cameras: {} }).cameras, {});
+  }
+  assert.deepEqual(normalizeStatus({ spatial: { state: 'waiting_for_frames' } }).spatial.cameras, {});
+});
+
+test('invalid camera coordinates are omitted independently while finite supplied points survive exactly', () => {
+  const measured = { x: 2.5388336533, y: -0.17, z: 0 };
+  for (const invalid of [undefined, null, {}, [], { x: -0.3, y: 0 }, { x: NaN, y: 0, z: 0 }, { x: 0, y: Infinity, z: 0 }, { x: '0', y: 0, z: 0 }, { x: 0, y: 0, z: null }]) {
+    const result = normalizeSpatial({ state: 'ready', cameras: { camera1: invalid, camera2: measured } });
+    assert.deepEqual(result.cameras, { camera2: measured });
+    assert.equal(Object.hasOwn(result.cameras, 'camera1'), false);
+  }
+  assert.deepEqual(normalizeSpatial({ state: 'ready', cameras: { camera1: { x: 0, y: 0, z: 0 } } }).cameras, { camera1: { x: 0, y: 0, z: 0 } });
+});
+
 test('calibrated signed X/Y/Z survive in the midpoint frame', () => {
   const result = normalizeSpatial({ state: 'ready', targets: [target], cameras: { camera1: { x: -0.3349550712, y: 0, z: 0 } } });
   assert.equal(result.targets.length, 1);
@@ -21,6 +40,7 @@ test('calibrated signed X/Y/Z survive in the midpoint frame', () => {
   assert.ok(result.targets[0].azimuthDeg < 0);
   assert.ok(result.targets[0].elevationDeg > 0);
   assert.equal(result.cameras.camera1.y, 0);
+  assert.equal(Object.hasOwn(result.cameras, 'camera2'), false);
 });
 
 test('nonfinite, uncalibrated and negative error measurements are excluded', () => {

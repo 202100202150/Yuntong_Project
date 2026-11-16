@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import 'dotenv/config';
-import { frameRouter } from './routes/frame.mjs';
+import { createFrameRouter } from './routes/frame.mjs';
 import { createDetectionRouter } from './routes/detection.mjs';
 import { createRecordingRouter } from './routes/recording.mjs';
 import { createSnapshotsRouter } from './routes/snapshots.mjs';
@@ -19,6 +19,7 @@ import { createMediaService } from './product/media.mjs';
 import { createConfiguration } from './product/config.mjs';
 import { createCalibrationService } from './product/calibration.mjs';
 import { createLocalSpatialRouter } from './product/spatial.mjs';
+import { createMonitorService } from './product/monitor.mjs';
 
 export async function startBackend(options={}) {
  const shouldStart=options.startBridge??options.startCamera??true;
@@ -58,6 +59,7 @@ export async function startBackend(options={}) {
  const media=createMediaService(store,config.roots);
  const calibration=createCalibrationService(store,config,runtimeBridge);
  const localSpatial=createLocalSpatialRouter(store,config,runtimeBridge);
+ const monitor=createMonitorService(store,config,{...runtimeBridge,status},options.monitorOptions);
  app.get('/api/status',permission('monitor'),asyncRoute(async(_req,res)=>res.json(await status())));
  app.use('/api',config.router);
  app.use('/api/users',createUsersRouter(store));
@@ -65,6 +67,7 @@ export async function startBackend(options={}) {
  app.use('/api',media.router);
  app.use('/api',calibration.router);
  app.use('/api',localSpatial.router);
+ app.use('/api',monitor.router);
  app.get('/api/overview',permission('monitor'),asyncRoute(async(_req,res)=>{
   const live=await status(),today=new Date();today.setHours(0,0,0,0);
   const rows=store.db.prepare('SELECT * FROM events ORDER BY started_at DESC LIMIT 5').all();
@@ -77,7 +80,7 @@ export async function startBackend(options={}) {
  app.use('/api/recording',permission('review'));
  app.use('/api/snapshots',permission('export'));
  app.use('/api/spatial',(req,res,next)=>req.method==='GET'?permission('monitor')(req,res,next):permission('devices')(req,res,next));
- app.use('/api',frameRouter,createDetectionRouter(runtimeBridge.request),createRecordingRouter(runtimeBridge.request),createSnapshotsRouter({request:runtimeBridge.request,roots:config.roots,indexSnapshot:media.indexSnapshot,audit:store.audit}),spatialRouter);
+ app.use('/api',createFrameRouter(runtimeBridge.request),createDetectionRouter(runtimeBridge.request),createRecordingRouter(runtimeBridge.request),createSnapshotsRouter({request:runtimeBridge.request,roots:config.roots,indexSnapshot:media.indexSnapshot,audit:store.audit}),spatialRouter);
  app.use('/api',(_req,_res,next)=>next(fault(404,'接口不存在')));
  if(fs.existsSync(path.join(staticDirectory,'index.html'))) {
    app.use(express.static(staticDirectory,{index:false}));
@@ -104,12 +107,13 @@ export async function startBackend(options={}) {
  const close=()=>closePromise??=(async()=>{
   closed=true;clearInterval(timer);
   calibration.close();
+  monitor.close();
   for(const client of wss.clients)client.terminate();wss.close();
   await runtimeBridge.stop?.();
   await tickPromise;
   await new Promise(resolve=>server.close(resolve));store.db.close();
  })();
- return {app,server,url:'http://'+(host==='0.0.0.0'?'127.0.0.1':host)+':'+server.address().port,close,store,status,config,media};
+ return {app,server,url:'http://'+(host==='0.0.0.0'?'127.0.0.1':host)+':'+server.address().port,close,store,status,config,media,monitor};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href) {
  startBackend().then(runtime=>{

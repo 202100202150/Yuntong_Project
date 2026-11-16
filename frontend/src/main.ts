@@ -4,6 +4,7 @@ import App from './App.vue';
 import {useAuthStore} from './stores/auth';
 import router from './router';
 import './styles/product.css';
+import './styles/realtime.css';
 
 const app = createApp(App);
 app.use(createPinia());

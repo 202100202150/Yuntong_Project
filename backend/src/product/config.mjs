@@ -28,7 +28,7 @@ export function createConfiguration(store,bridge) {
  const roots=()=>ids.map((id,i)=>path.resolve(project,env['CAMERA'+(i+1)+'_OUTPUT_DIR']||env['CAMERA'+(i+1)+'_RECORD_DIR']||env.CAMERA_RECORD_DIR||path.join(store.directory,'recordings',id)));
  function runtimeOptions() {
   const childEnv={...env};devices().forEach((device,i)=>{
-   const prefix='CAMERA'+(i+1);Object.assign(childEnv,{[prefix+'_IP']:device.host,[prefix+'_LABEL']:device.label,[prefix+'_RTSP_PORT']:String(device.port),[prefix+'_USERNAME']:device.username,[prefix+'_PASSWORD']:device.password,[prefix+'_CHANNEL']:String(device.channel),[prefix+'_OUTPUT_DIR']:roots()[i],[prefix+'_RTSP_PATH']:'/Streaming/Channels/'+device.channel+(device.stream==='sub'?'02':'01')});
+   const prefix='CAMERA'+(i+1);Object.assign(childEnv,{[prefix+'_IP']:device.host,[prefix+'_LABEL']:device.label,[prefix+'_RTSP_PORT']:String(device.port),[prefix+'_USERNAME']:device.username,[prefix+'_PASSWORD']:device.password,[prefix+'_CHANNEL']:String(device.channel),[prefix+'_OUTPUT_DIR']:roots()[i],[prefix+'_RTSP_PATH']:device.path||'/Streaming/Channels/'+device.channel+(device.stream==='sub'?'02':'01')});
   });
   childEnv.CAMERA_MODEL_THRESHOLD=String(model().threshold);
   childEnv.CAMERA_HOLD_SECONDS=String(model().holdSeconds);
