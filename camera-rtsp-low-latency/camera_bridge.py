@@ -1205,7 +1205,7 @@ class CameraBridgeService:
         self._stopped = False
         self._secrets = tuple(filter(None, secrets or []))
         self._spatial_lock = threading.RLock()
-        self._spatial_config_path = spatial_config_path or Path(__file__).with_name('spatial-config.json')
+        self._spatial_config_path = spatial_config_path or Path(os.getenv('CAMERA_SPATIAL_CONFIG') or Path(__file__).with_name('spatial-config.json'))
         self._spatial_config = validate_config(
             json.loads(self._spatial_config_path.read_text(encoding='utf-8-sig'))
             if self._spatial_config_path.exists() else default_config()
@@ -1249,7 +1249,7 @@ class CameraBridgeService:
             )
         if detector is None:
             assert engine_cache_dir is not None
-            detector = TensorRTDroneDetector(model_path, engine_cache_dir)
+            detector = TensorRTDroneDetector(model_path, engine_cache_dir, confidence_threshold=float(os.getenv('CAMERA_MODEL_THRESHOLD', '0.15')))
 
         self.detection = DetectionCoordinator(
             {key: runtime.frames for key, runtime in self.cameras.items()},

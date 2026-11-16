@@ -191,14 +191,19 @@ export interface CameraPreviewPair {
 export interface SnapshotResult {
   cameraId: CameraId;
   saved: boolean;
+  queued?: boolean;
+  mediaId?: string;
+  downloadUrl?: string;
+  name?: string;
   error?: string;
 }
 
 export interface RecordingToggleResult {
   recording: boolean;
+  requestedRecording?: boolean;
   cameras: {
-    camera1: { state: string };
-    camera2: { state: string };
+    camera1: { state: string; error?: string };
+    camera2: { state: string; error?: string };
   };
 }
 

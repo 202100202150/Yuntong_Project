@@ -1,373 +1,90 @@
-<template>
-  <div class="workspace-container">
-    <!-- 顶部工具栏（录制、截图） -->
-    <Teleport defer to="#global-header-actions">
-      <div class="toolbar-actions">
-        <button class="action-btn" :class="{ 'is-active': status.recording }" @click="toggleRecording" :disabled="!serviceReady || recordBusy">
-          <Loader2 v-if="recordBusy" class="spin" :size="16" />
-          <Circle v-else :size="16" fill="currentColor" />
-          {{ status.recording ? '停止录制' : '开始录制' }}
-        </button>
-        <button class="action-btn" @click="captureBoth" :disabled="!serviceReady || !bothFramesReady || snapshotBusy">
-          <Loader2 v-if="snapshotBusy" class="spin" :size="16" />
-          <Camera v-else :size="16" />
-          截图保存
-        </button>
-      </div>
-    </Teleport>
-
-    <!-- 工作区网格 -->
-    <div class="workspace-grid">
-      <!-- 3D 面板 -->
-      <div class="panel-card card-left" ref="card3dRef">
-        <div class="card-header">
-          <div class="card-title">
-            <span>空间定位</span>
-            <span class="status-pill" :class="status.spatial.state === 'ready' ? 'success' : 'idle'">
-              {{ status.spatial.state === 'uncalibrated' ? '需要标定' : status.spatial.state === 'ready' ? '米制定位' : '等待有效定位' }}
-            </span>
-          </div>
-          <div class="header-actions">
-            <!-- 👇 新增：3D / 2D 切换按钮 -->
-            <div class="mode-switch">
-              <button
-                :class="{ active: spatialSceneRef?.sceneMode === '3d' }"
-                @click="spatialSceneRef?.switchMode('3d')"
-              >3D</button>
-              <button
-                :class="{ active: spatialSceneRef?.sceneMode === '2d' }"
-                @click="spatialSceneRef?.switchMode('2d')"
-              >2D</button>
-            </div>
-
-            <button class="icon-action-btn" @click="enterNativeFullscreen('3d')" title="全屏显示">
-              <Maximize :size="16" />
-            </button>
-          </div>
-        </div>
-        <div class="card-body spatial-body">
-          <SpatialScene
-            ref="spatialSceneRef"
-            :detecting="status.detecting"
-            :spatial="status.spatial"
-          />
-          <div class="custom-legend">
-            <span><i class="dot x"></i> X 左</span>
-            <span><i class="dot y"></i> Y 上</span>
-            <span><i class="dot z"></i> Z 前</span>
-            <span><i class="dot drone"></i> 无人机</span>
-            <span class="target-count">有效定位：{{ totalTargets }} · 单位 m</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- 双路监控面板 -->
-      <div class="panel-card card-right">
-        <div class="card-header">
-          <div class="card-title">
-            <span>双路监控</span>
-            <span v-if="waitingForPair" class="status-pill idle">等待同步画面</span>
-          </div>
-          <div class="header-actions">
-            <button class="start-btn" :class="{ 'is-stop': status.detecting }" @click="toggleDetection" :disabled="!serviceReady || runState === 'starting'">
-              <Loader2 v-if="runState === 'starting'" class="spin" :size="14" />
-              <component v-else :is="status.detecting ? Pause : Play" :size="14" />
-              {{ runState === 'starting' ? '启动中...' : status.detecting ? '暂停检测' : '开始检测' }}
-            </button>
-          </div>
-        </div>
-
-        <div class="card-body cameras-body">
-          <div class="camera-wrapper" v-for="id in cameraIds" :key="id" :ref="(el) => setCameraRef(el, id)">
-            <CameraPanel
-              :ref="(panel) => setCameraPanelRef(id, panel)"
-              :camera-id="id" :status="status.cameras[id]" :display-fps="getRealFps(id)" :bridge="status"
-            />
-
-            <div class="error-overlay" v-if="!status.cameras[id].frameAvailable && status.serviceState === 'error'">
-              <AlertCircle :size="24" class="error-icon" />
-              <p class="error-title">服务未连接：无法获取视频流 (500)</p>
-              <button @click="retryConnection" class="retry-btn">
-                <RefreshCw :size="14" /> 重新连接
-              </button>
-            </div>
-
-            <div class="camera-btn-group">
-              <button class="camera-action-btn" @click="enterNativeFullscreen(id)" title="全屏显示">
-                <Maximize :size="14" />
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</template>
-
+<template><section class="monitor-workspace" data-testid="monitor-workspace">
+<div ref="splitContainer" class="monitor-split" :class="{'single-pane':pane!=='main'}" :style="{'--split':splitRatio}">
+<section v-if="pane!=='video'" ref="scenePanel" class="monitor-panel scene-panel" data-testid="scene-panel"><header class="monitor-panel-heading"><h2>三维态势</h2><div class="scene-toolbar"><div class="segmented"><button :class="{active:mode==='3d'}" :aria-pressed="mode==='3d'" @click="changeMode('3d')">透视</button><button :class="{active:mode==='2d'}" :aria-pressed="mode==='2d'" @click="changeMode('2d')">平面</button></div><button class="monitor-icon" :title="mode==='2d'?'平面视图不提供环绕，切换透视后可用':'自动环绕观察'" aria-label="自动环绕观察" :aria-pressed="!!sceneRef?.orbiting" :disabled="!modelReady||mode==='2d'" @click="sceneRef?.toggleOrbit()"><Orbit :size="19"/></button><button class="monitor-icon" title="恢复校园全景（Home）" aria-label="恢复校园全景" :disabled="!modelReady" @click="resetSceneView"><RotateCcw :size="19"/></button><button class="monitor-icon" :title="pane==='scene'?'全屏三维视图':'独立打开三维窗口'" :aria-label="pane==='scene'?'全屏三维视图':'独立打开三维窗口'" @click="pane==='scene'?fullscreenPanel('scene'):openPane('scene')"><component :is="pane==='scene'?Maximize:ExternalLink" :size="18"/></button></div></header>
+<div class="campus-viewport"><CampusScene ref="sceneRef" :spatial="camera.status.spatial" :detecting="camera.status.detecting" :devices="monitor.devices" :scene-config="monitor.sceneConfig" :selected-camera-id="monitor.selectedCameraId" :selected-target-id="monitor.selectedTargetId" @ready="modelReady=true" @error="modelError" @configure="sceneSettingsOpen=true" @select-camera="selectCamera" @select-target="selectTarget" @focus-videos="focusVideos"/></div></section>
+<div v-if="pane==='main'" class="monitor-splitter" role="separator" tabindex="0" aria-label="调整三维和视频区域宽度" aria-orientation="vertical" :aria-valuenow="Math.round(splitRatio)" aria-valuemin="25" aria-valuemax="70" @pointerdown="startResize" @pointermove="resize" @pointerup="endResize" @pointercancel="endResize" @keydown.left.prevent="setSplit(splitRatio-2)" @keydown.right.prevent="setSplit(splitRatio+2)" @dblclick="setSplit(44.5)"><GripVertical :size="15"/></div>
+<section v-if="pane!=='scene'" ref="videoPanel" class="monitor-panel video-panel" data-testid="video-panel"><header class="monitor-panel-heading"><h2>视频监控</h2></header><div class="video-toolbar"><div class="segmented layout-options" role="group" aria-label="视频分屏"><button v-for="option in layoutOptions" :key="option.size" :class="{active:layout===option.size}" :aria-pressed="layout===option.size" @click="setLayout(option.size)">{{option.label}}</button></div><div class="video-toolbar-actions"><button class="monitor-tool" :aria-expanded="devicesOpen" @click="openDevices()"><List :size="17"/><span>设备</span></button><button v-if="pane==='main'" class="monitor-icon" title="独立打开监控窗口" aria-label="独立打开监控窗口" @click="openPane('video')"><ExternalLink :size="18"/></button><button class="monitor-icon" title="全屏视频墙" aria-label="全屏视频墙" @click="fullscreenPanel('video')"><Maximize :size="19"/></button></div></div>
+<div class="camera-grid" data-testid="camera-grid" :data-layout="layout" :style="{'--columns':columns,'--rows':rows}"><div v-for="(device,index) in slots" :key="device?.id||'empty-'+index" class="camera-slot" :data-camera-id="device?.id" :draggable="!!device" @dragstart="dragCamera=$event.dataTransfer?device?.id||'':''; $event.dataTransfer?.setData('text/plain',device?.id||'')" @dragover.prevent @drop.prevent="device&&dropCamera(device.id)">
+<LiveCameraTile v-if="device" :ref="el=>setTile(device!.id,el)" :device="device" :selected="isSelected(device.id)" :can-snapshot="auth.can('export')" :can-configure="auth.can('devices')" @select="selectCamera" @fullscreen="fullscreenCamera" @configure="openDevices" @error="message=>camera.toast(message,'error')"/>
+<button v-else class="empty-camera-slot" aria-label="选择视频通道" @click="openDevices()"><Plus :size="25" :stroke-width="1.3"/><span>选择视频通道</span></button></div></div>
+<footer class="video-pagination"><button class="monitor-icon" aria-label="上一页视频" :disabled="page===0" @click="page--"><ChevronLeft :size="18"/></button><span>第 {{page+1}} / {{totalPages}} 页</span><button class="monitor-icon" aria-label="下一页视频" :disabled="page>=totalPages-1" @click="page++"><ChevronRight :size="18"/></button><div class="pagination-spacer"/><label class="tour-control" :title="totalPages<2?'超过一页视频后可开启轮巡':'每10秒切换一页'">轮巡<button class="tour-switch" role="switch" aria-label="视频轮巡" :aria-checked="touring" :disabled="totalPages<2" @click="touring=!touring"><i/></button></label><select class="page-size" :value="layout" aria-label="每页视频数量" @change="setLayout(Number(($event.target as HTMLSelectElement).value) as VideoLayout)"><option v-for="size in layouts" :key="size" :value="size">每页 {{size}} 路</option></select></footer>
+</section></div>
+<footer class="monitor-statusbar"><span><i :class="{connected:online>0}"/>{{online>0?'视频与三维同步':monitor.error?'服务未连接':'等待视频接入'}}</span><span v-if="selectedTarget"><i class="connected"/>已选择 {{selectedTarget.id}} · C1 / C2</span><span v-else-if="monitor.selectedCameraId">{{selectedCameraLabel}}</span><span class="statusbar-right">{{monitor.devices.length}} 台相机 · {{online}} 路在线</span></footer>
+<MonitorDevices :open="devicesOpen" :hidden-ids="hiddenIds" :initial-device-id="editDeviceId" @close="devicesOpen=false" @visibility="setVisibility" @focus="focusCamera" @updated="deviceUpdated" @open-scene="devicesOpen=false;sceneSettingsOpen=true"/>
+<SceneRegistration :open="sceneSettingsOpen" @close="sceneSettingsOpen=false"/>
+</section></template>
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, nextTick, watch } from 'vue';
-import { storeToRefs } from 'pinia';
-import { Camera, Circle, Maximize, Play, Pause, Loader2, AlertCircle, RefreshCw } from 'lucide-vue-next';
-import { useCameraStore } from '@/stores/camera';
-import { cameraBridge } from '@/api/camera-bridge';
-import SpatialScene from '@/components/SpatialScene.vue';
-import CameraPanel from '@/components/CameraPanel.vue';
-import type { CameraId } from '@/types/camera-types';
-
-const store = useCameraStore();
-const { status, runState } = storeToRefs(store);
-const cameraIds: CameraId[] = ['camera1', 'camera2'];
-const recordBusy = ref(false);
-const snapshotBusy = ref(false);
-
-const card3dRef = ref<HTMLElement | null>(null);
-const spatialSceneRef = ref<any>(null); // 👈 新增
-const camera1Ref = ref<HTMLElement | null>(null);
-const camera2Ref = ref<HTMLElement | null>(null);
-const cameraPanels: Partial<Record<CameraId, InstanceType<typeof CameraPanel>>> = {};
-const waitingForPair = ref(false);
-
-function setCameraPanelRef(id: CameraId, panel: unknown) {
-  if (panel) cameraPanels[id] = panel as InstanceType<typeof CameraPanel>;
-  else delete cameraPanels[id];
-}
-
-const setCameraRef = (el: any, id: CameraId) => {
-  if (id === 'camera1') camera1Ref.value = el;
-  if (id === 'camera2') camera2Ref.value = el;
-};
-
-const serviceReady = computed(() => status.value.serviceState === 'ready' || status.value.serviceState === 'error');
-const bothFramesReady = computed(() => cameraIds.every((id) => status.value.cameras[id].frameAvailable));
-const totalTargets = computed(() => status.value.detecting ? status.value.spatial.targets.length : 0);
-const previewMode = computed<'pair' | CameraId | null>(() => {
-  const live = cameraIds.filter((id) => {
-    const camera = status.value.cameras[id];
-    return camera.state === 'streaming' && camera.frameAvailable;
-  });
-  return live.length === 2 ? 'pair' : live[0] ?? null;
-});
-
-const getRealFps = (id: CameraId) => {
-  const cam = status.value.cameras[id];
-  return Math.round(cam.previewFps || cam.decodeFps || 0);
-};
-
-const toggleDetection = () => store.toggleDetection();
-const retryConnection = () => store.refreshStatus();
-
-async function toggleRecording() {
-  if (!serviceReady.value || recordBusy.value) return;
-  recordBusy.value = true;
-  try { await store.toggleRecording(); } finally { recordBusy.value = false; }
-}
-
-async function captureBoth() {
-  if (!serviceReady.value || snapshotBusy.value) return;
-  snapshotBusy.value = true;
-  try { await store.captureBoth(); } finally { snapshotBusy.value = false; }
-}
-
-async function enterNativeFullscreen(target: '3d' | CameraId) {
-  let el = target === '3d' ? card3dRef.value : target === 'camera1' ? camera1Ref.value : camera2Ref.value;
-  if (!el) return;
-  try {
-    if (!document.fullscreenElement) await el.requestFullscreen();
-    else await document.exitFullscreen();
-    nextTick(() => setTimeout(() => window.dispatchEvent(new Event('resize')), 100));
-  } catch { store.toast('当前环境拒绝全屏。', 'error'); }
-}
-
-const handleFullscreenChange = () => nextTick(() => setTimeout(() => window.dispatchEvent(new Event('resize')), 100));
-
-let cancelled = false;
-let previewRequest: AbortController | undefined;
-const singleCursor: Record<CameraId, number> = { camera1: 0, camera2: 0 };
-const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-watch(previewMode, (mode) => {
-  previewRequest?.abort();
-  waitingForPair.value = false;
-  if (mode === 'camera1' || mode === 'camera2') singleCursor[mode] = 0;
-  if (mode !== 'pair') {
-    for (const id of cameraIds) {
-      if (id !== mode) cameraPanels[id]?.clearFrame();
-    }
-  }
-});
-
-// A restarted camera service can reset the old single-camera endpoint's frame sequence.
-watch(() => cameraIds.map((id) => status.value.cameras[id].sequence), (current, previous) => {
-  cameraIds.forEach((id, index) => {
-    if (current[index] < previous[index]) {
-      singleCursor[id] = 0;
-      if (previewMode.value === id) previewRequest?.abort();
-    }
-  });
-});
-
-async function runPreview() {
-  const pairedCursor = { camera1: 0, camera2: 0 };
-  let epoch = '';
-  while (!cancelled) {
-    const mode = previewMode.value;
-    const { camera1, camera2 } = cameraPanels;
-    if (!mode || !camera1 || !camera2 || document.hidden) {
-      await delay(100);
-      continue;
-    }
-    const request = new AbortController();
-    previewRequest = request;
-    try {
-      if (mode === 'pair') {
-        const pair = await cameraBridge.getPreviewPair(pairedCursor, epoch, request.signal);
-        if (request.signal.aborted) continue;
-        if (!pair) {
-          waitingForPair.value = true;
-          await delay(20);
-          continue;
-        }
-        pairedCursor.camera1 = pair.camera1.sequence;
-        pairedCursor.camera2 = pair.camera2.sequence;
-        epoch = pair.epoch;
-        const [first, second] = await Promise.allSettled([
-          createImageBitmap(pair.camera1.jpeg),
-          createImageBitmap(pair.camera2.jpeg),
-        ]);
-        if (request.signal.aborted || first.status !== 'fulfilled' || second.status !== 'fulfilled') {
-          if (first.status === 'fulfilled') first.value.close();
-          if (second.status === 'fulfilled') second.value.close();
-          continue;
-        }
-        // Present both decoded images in the same browser task. A slow JPEG
-        // never advances one canvas while the other is still on the old pair.
-        camera1.presentFrame(first.value);
-        camera2.presentFrame(second.value);
-        waitingForPair.value = false;
-      } else {
-        const frame = await cameraBridge.getFrame(mode, singleCursor[mode], request.signal);
-        if (request.signal.aborted) continue;
-        if (!frame) {
-          await delay(20);
-          continue;
-        }
-        singleCursor[mode] = frame.sequence;
-        const bytes = new Uint8Array(frame.jpegBytes);
-        const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
-        if (request.signal.aborted) bitmap.close();
-        else {
-          pairedCursor[mode] = frame.sequence;
-          (mode === 'camera1' ? camera1 : camera2).presentFrame(bitmap);
-        }
-      }
-    } catch {
-      if (!request.signal.aborted) await delay(150);
-    } finally {
-      previewRequest = undefined;
-    }
-  }
-}
-
-onMounted(() => {
-  void runPreview();
-  (async () => {
-    while (!cancelled) {
-      try {
-        await store.refreshStatus();
-      } catch (e) {
-        // 静默处理
-      }
-      // Localization runs in the sidecar independently of this serial poll.
-      await delay(status.value.detecting && !document.hidden ? 250 : 1000);
-    }
-  })();
-  document.addEventListener('fullscreenchange', handleFullscreenChange);
-});
-
-onUnmounted(() => {
-  cancelled = true;
-  previewRequest?.abort();
-  document.removeEventListener('fullscreenchange', handleFullscreenChange);
-});
+import {computed,nextTick,onMounted,onUnmounted,ref,watch} from 'vue';
+import {useRoute} from 'vue-router';
+import {Orbit,RotateCcw,ExternalLink,Maximize,List,GripVertical,Plus,ChevronLeft,ChevronRight} from 'lucide-vue-next';
+import CampusScene from '@/components/CampusScene.vue';
+import LiveCameraTile from '@/components/LiveCameraTile.vue';
+import MonitorDevices from '@/components/MonitorDevices.vue';
+import SceneRegistration from '@/components/SceneRegistration.vue';
+import {useCameraStore} from '@/stores/camera';
+import {useMonitorStore} from '@/stores/monitor';
+import {useAuthStore} from '@/stores/auth';
+import {cameraBridge} from '@/api/camera-bridge';
+import {layouts,normalizeLayout,orderedVisibleIds,pageCount,moveCamera,type VideoLayout} from '@/lib/video-wall';
+import type {MonitorDevice} from '@/types/monitor';
+const route=useRoute(),camera=useCameraStore(),monitor=useMonitorStore(),auth=useAuthStore();
+const pane=computed<'main'|'scene'|'video'>(()=>route.query.pane==='scene'?'scene':route.query.pane==='video'?'video':'main');
+function saved<T>(key:string,fallback:T):T{try{return JSON.parse(localStorage.getItem(key)||'null')??fallback}catch{return fallback}}
+function persist(key:string,value:unknown){try{localStorage.setItem(key,JSON.stringify(value))}catch{}}
+const layout=ref<VideoLayout>(normalizeLayout(saved('yuntong.monitor.layout',9))),page=ref(0),hiddenIds=ref<string[]>(saved('yuntong.monitor.hidden',[])),order=ref<string[]>(saved('yuntong.monitor.order',[])),splitRatio=ref(Math.max(25,Math.min(70,Number(saved('yuntong.monitor.split',44.5))||44.5))),touring=ref(false),mode=ref<'2d'|'3d'>('3d');
+const devicesOpen=ref(false),editDeviceId=ref<string|null>(null),sceneSettingsOpen=ref(false),sceneRef=ref<InstanceType<typeof CampusScene>|null>(null),modelReady=ref(false),splitContainer=ref<HTMLElement|null>(null),scenePanel=ref<HTMLElement|null>(null),videoPanel=ref<HTMLElement|null>(null);
+const layoutOptions=[{size:1 as const,label:'单屏'},{size:2 as const,label:'双屏'},{size:4 as const,label:'四分屏'},{size:9 as const,label:'九分屏'},{size:16 as const,label:'十六分屏'}];
+const orderedIds=computed(()=>orderedVisibleIds(monitor.devices.map(d=>d.id),hiddenIds.value,order.value));
+const totalPages=computed(()=>pageCount(orderedIds.value.length,layout.value));
+const visibleDevices=computed(()=>orderedIds.value.slice(page.value*layout.value,(page.value+1)*layout.value).map(id=>monitor.devices.find(d=>d.id===id)!).filter(Boolean));
+const slots=computed<Array<MonitorDevice|null>>(()=>Array.from({length:layout.value},(_,i)=>visibleDevices.value[i]||null));
+const columns=computed(()=>layout.value===1||layout.value===2?1:Math.sqrt(layout.value)),rows=computed(()=>layout.value===2?2:columns.value);
+const online=computed(()=>monitor.devices.filter(d=>d.runtime?.state==='streaming'&&d.runtime?.frameAvailable).length);
+const selectedTarget=computed(()=>camera.status.detecting?camera.status.spatial.targets.find(t=>t.id===monitor.selectedTargetId):undefined);
+const selectedCameraLabel=computed(()=>{const d=monitor.devices.find(d=>d.id===monitor.selectedCameraId);return d?d.code+' · '+d.label:''});
+function setLayout(value:VideoLayout){layout.value=normalizeLayout(value);page.value=0;persist('yuntong.monitor.layout',layout.value)}
+watch(totalPages,value=>{if(page.value>=value)page.value=value-1;if(value<2)touring.value=false});
+watch(()=>camera.status.spatial.targets.map(t=>t.id).join('|'),()=>{const targets=camera.status.detecting?camera.status.spatial.targets:[];if(!targets.some(t=>t.id===monitor.selectedTargetId))monitor.selectedTargetId=targets[0]?.id||null});
+watch(()=>camera.status.detecting,value=>{if(!value)monitor.selectedTargetId=null});
+function selectCamera(id:string){monitor.selectedCameraId=id}
+function selectTarget(id:string){monitor.selectedTargetId=id}
+function isSelected(id:string){return monitor.selectedCameraId===id||!!selectedTarget.value&&['camera1','camera2'].includes(id)}
+function focusCamera(id:string){setVisibility(id,true);monitor.selectedCameraId=id;page.value=Math.max(0,Math.floor(orderedIds.value.indexOf(id)/layout.value));devicesOpen.value=false}
+function focusVideos(ids:string[]){if(pane.value==='scene'){persist('yuntong.monitor.pendingFocus',{ids,at:Date.now()});openPane('video');broadcast?.postMessage({sender,type:'focus-videos',ids});return}const existing=ids.filter(id=>monitor.devices.some(d=>d.id===id));if(!existing.length)return;hiddenIds.value=hiddenIds.value.filter(id=>!existing.includes(id));order.value=[...existing,...orderedIds.value.filter(id=>!existing.includes(id))];persist('yuntong.monitor.order',order.value);persist('yuntong.monitor.hidden',hiddenIds.value);setLayout(existing.length>1?2:1);monitor.selectedCameraId=existing[0]}
+function setVisibility(id:string,visible:boolean){hiddenIds.value=visible?hiddenIds.value.filter(value=>value!==id):[...new Set([...hiddenIds.value,id])];persist('yuntong.monitor.hidden',hiddenIds.value)}
+function openDevices(id?:string){editDeviceId.value=id||null;devicesOpen.value=true}
+let dragCamera='';
+function dropCamera(target:string){if(!dragCamera||dragCamera===target)return;order.value=moveCamera(orderedIds.value,dragCamera,target);persist('yuntong.monitor.order',order.value);dragCamera=''}
+function changeMode(value:'2d'|'3d'){mode.value=value;sceneRef.value?.switchMode(value)}
+function resetSceneView(){if(sceneRef.value?.resetView())camera.toast('校园全景已恢复','success')}
+function modelError(message:string){modelReady.value=false;camera.toast(message,'error')}
+function openPane(value:'scene'|'video'){const url=new URL('/workbench',location.origin);url.searchParams.set('pane',value);const child=window.open(url.href,'yuntong-'+value,'popup,width=1440,height=960');if(!child&&!window.yuntongDesktop)camera.toast('窗口被浏览器拦截，请允许本站弹出窗口后重试。','error');else child?.focus()}
+async function fullscreenPanel(value:'scene'|'video'){const element=value==='scene'?scenePanel.value:videoPanel.value;try{if(document.fullscreenElement)await document.exitFullscreen();else await element?.requestFullscreen()}catch{camera.toast('当前环境拒绝全屏，请检查窗口权限。','error')}}
+async function fullscreenCamera(id:string){const element=videoPanel.value?.querySelector<HTMLElement>('[data-camera-id="'+CSS.escape(id)+'"] .live-tile');try{if(document.fullscreenElement)await document.exitFullscreen();else await element?.requestFullscreen()}catch{camera.toast('当前环境拒绝全屏。','error')}}
+let resizing=false;
+function setSplit(value:number){splitRatio.value=Math.max(25,Math.min(70,value));persist('yuntong.monitor.split',splitRatio.value)}
+function startResize(event:PointerEvent){resizing=true;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);event.preventDefault()}
+function resize(event:PointerEvent){if(!resizing)return;const rect=splitContainer.value?.getBoundingClientRect();if(rect)setSplit((event.clientX-rect.left)/rect.width*100)}
+function endResize(){resizing=false}
+const tileRefs=new Map<string,InstanceType<typeof LiveCameraTile>>();
+function setTile(id:string,value:unknown){if(value)tileRefs.set(id,value as InstanceType<typeof LiveCameraTile>);else tileRefs.delete(id)}
+const apiBase=(import.meta.env.VITE_API_BASE as string)||'/api';
+let controllers:AbortController[]=[],streamGeneration=0,disposed=false;
+function wait(milliseconds:number,signal:AbortSignal){return new Promise<void>(resolve=>{if(signal.aborted){resolve();return}const finish=()=>{clearTimeout(timer);signal.removeEventListener('abort',finish);resolve()},timer=setTimeout(finish,milliseconds);signal.addEventListener('abort',finish,{once:true})})}
+async function singleStream(id:string,signal:AbortSignal){let sequence=0;while(!signal.aborted){if(document.hidden){await wait(250,signal);continue}try{const response=await fetch(apiBase+'/monitor/cameras/'+encodeURIComponent(id)+'/frame.jpg?afterSequence='+sequence,{cache:'no-store',credentials:'same-origin',signal});if(response.status===401){window.dispatchEvent(new Event('yuntong:session-expired'));return}if(response.status===204){await wait(65,signal);continue}if(!response.ok){let reason='视频源暂不可用';try{reason=(await response.json()).error||reason}catch{}throw new Error(reason)}const nextSequence=Number(response.headers.get('X-Frame-Sequence'))||0,receivedAt=Number(response.headers.get('X-Frame-Received-At'))||Date.now(),blob=await response.blob();const bitmap=await createImageBitmap(blob);if(signal.aborted||!tileRefs.has(id)){bitmap.close();return}sequence=nextSequence;tileRefs.get(id)!.presentFrame(bitmap,receivedAt);await wait(35,signal)}catch(error){if(signal.aborted)return;tileRefs.get(id)?.setFailure((error as Error).message);await wait(1000,signal)}}}
+async function pairStream(signal:AbortSignal){const cursor={camera1:0,camera2:0};let epoch='';while(!signal.aborted){if(document.hidden){await wait(250,signal);continue}try{const requestedAt=Date.now();const pair=await cameraBridge.getPreviewPair(cursor,epoch,signal);if(signal.aborted)return;if(Date.now()-requestedAt>4000)throw new Error('视频传输延迟过高，正在重新同步');if(!pair){await wait(35,signal);continue}const decoded=await Promise.allSettled([createImageBitmap(pair.camera1.jpeg),createImageBitmap(pair.camera2.jpeg)]);if(signal.aborted||decoded.some(result=>result.status!=='fulfilled')){decoded.forEach(result=>{if(result.status==='fulfilled')result.value.close()});continue}cursor.camera1=pair.camera1.sequence;cursor.camera2=pair.camera2.sequence;epoch=pair.epoch;decoded.forEach((result,index)=>{if(result.status!=='fulfilled')return;const tile=tileRefs.get(index?'camera2':'camera1');if(tile)tile.presentFrame(result.value);else result.value.close()});await wait(30,signal)}catch(error){if(signal.aborted)return;for(const id of ['camera1','camera2'])tileRefs.get(id)?.setFailure((error as Error).message);await wait(500,signal)}}}
+const paired=computed(()=>visibleDevices.value.some(d=>d.id==='camera1')&&visibleDevices.value.some(d=>d.id==='camera2')&&camera.status.cameras.camera1.state==='streaming'&&camera.status.cameras.camera2.state==='streaming'&&camera.status.cameras.camera1.frameAvailable&&camera.status.cameras.camera2.frameAvailable);
+async function restartStreams(){const generation=++streamGeneration;controllers.forEach(controller=>controller.abort());controllers=[];await nextTick();if(disposed||generation!==streamGeneration||pane.value==='scene')return;if(paired.value){const controller=new AbortController();controllers.push(controller);void pairStream(controller.signal)}for(const device of visibleDevices.value){if(paired.value&&['camera1','camera2'].includes(device.id))continue;if(!device.host)continue;const controller=new AbortController();controllers.push(controller);void singleStream(device.id,controller.signal)}}
+const sourceKeys=new Map<string,string>();
+watch(()=>pane.value+'|'+visibleDevices.value.map(d=>[d.id,d.host,d.port,d.username,d.channel,d.stream,d.path].join(':')).join('|')+'|'+paired.value,()=>{for(const device of visibleDevices.value){const key=[device.host,device.port,device.username,device.channel,device.stream,device.path].join(':');if(sourceKeys.has(device.id)&&sourceKeys.get(device.id)!==key)tileRefs.get(device.id)?.clearFrame();sourceKeys.set(device.id,key)}void restartStreams()},{immediate:true,flush:'post'});
+watch(()=>monitor.devices.map(d=>({id:d.id,sequence:d.runtime?.sequence||0})),(current,previous)=>{const reset=current.filter(item=>{const old=previous?.find(p=>p.id===item.id);return old&&item.sequence<old.sequence});if(reset.length){reset.forEach(item=>tileRefs.get(item.id)?.clearFrame());void restartStreams()}});
+function deviceUpdated(id:string,broadcastChange=true){tileRefs.get(id)?.clearFrame();void restartStreams();if(broadcastChange)broadcast?.postMessage({sender,type:'device-updated',id})}
+let tourTimer:ReturnType<typeof setInterval>|undefined,broadcast:BroadcastChannel|undefined;
+const sender=globalThis.crypto?.randomUUID?.()??Date.now().toString(36)+'-'+Math.random().toString(36).slice(2);
+function consumePendingFocus(){if(pane.value!=='video'||!monitor.loaded)return;const pending=saved<{ids:string[];at:number}|null>('yuntong.monitor.pendingFocus',null);if(pending&&Date.now()-pending.at<15000&&Array.isArray(pending.ids)){focusVideos(pending.ids.filter(id=>typeof id==='string'));try{localStorage.removeItem('yuntong.monitor.pendingFocus')}catch{}}}
+onMounted(()=>{tourTimer=setInterval(()=>{if(touring.value&&totalPages.value>1&&!document.hidden)page.value=(page.value+1)%totalPages.value},10000);if('BroadcastChannel'in window){broadcast=new BroadcastChannel('yuntong-monitor-selection');broadcast.onmessage=event=>{const data=event.data;if(!data||data.sender===sender)return;if(data.type==='selection'){if(typeof data.cameraId==='string'||data.cameraId===null)monitor.selectedCameraId=data.cameraId;if(typeof data.targetId==='string'||data.targetId===null)monitor.selectedTargetId=data.targetId}else if(data.type==='request-selection'&&pane.value==='main'){broadcast?.postMessage({sender,type:'selection',cameraId:monitor.selectedCameraId,targetId:monitor.selectedTargetId})}else if(data.type==='focus-videos'&&pane.value==='video'&&Array.isArray(data.ids)){focusVideos(data.ids.filter((id:unknown)=>typeof id==='string'))}else if(data.type==='device-updated'&&typeof data.id==='string'){void monitor.refresh().then(()=>deviceUpdated(data.id,false))}else if(data.type==='scene-config')void monitor.loadSceneConfig().catch(()=>{})};broadcast.postMessage({sender,type:'request-selection'})}consumePendingFocus()});
+watch(()=>monitor.loaded,consumePendingFocus);
+watch(()=>[monitor.selectedCameraId,monitor.selectedTargetId],()=>broadcast?.postMessage({sender,type:'selection',cameraId:monitor.selectedCameraId,targetId:monitor.selectedTargetId}));
+watch(()=>JSON.stringify(monitor.sceneConfig),()=>broadcast?.postMessage({sender,type:'scene-config'}));
+onUnmounted(()=>{disposed=true;streamGeneration++;controllers.forEach(controller=>controller.abort());clearInterval(tourTimer);broadcast?.close()});
 </script>
-
-<style scoped>
-.workspace-container { width: 100%; height: 100%; padding: 24px; display: flex; flex-direction: column; overflow: hidden; box-sizing: border-box; }
-.toolbar-actions { display: flex; align-items: center; gap: 12px; }
-.toolbar-actions .action-btn { display: flex; align-items: center; gap: 6px; padding: 6px 14px; background: transparent; border: 1px solid var(--border-color); border-radius: 6px; color: var(--text-main); font-size: 13px; font-weight: 500; cursor: pointer; transition: all 0.2s; }
-.toolbar-actions .action-btn:hover:not(:disabled) { background: rgba(148, 163, 184, 0.1); border-color: #94a3b8; }
-.toolbar-actions .action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.toolbar-actions .action-btn.is-active { background: rgba(239, 68, 68, 0.1); border-color: #ef4444; color: #ef4444; }
-.workspace-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 24px; flex: 1; min-height: 0; }
-.panel-card { background: var(--header-bg); border-radius: 16px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03); display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border-color); }
-.card-header { padding: 16px 20px; background: var(--header-bg); border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; height: 64px; box-sizing: border-box; }
-.card-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 12px; color: var(--text-main); }
-.card-body { flex: 1; position: relative; min-height: 0; }
-.status-pill { font-size: 12px; padding: 3px 8px; border-radius: 12px; font-weight: normal; }
-.status-pill.idle { background: #e2e8f0; color: #475569; }
-.status-pill.success { background: #dcfce7; color: #166534; }
-.spatial-body { padding: 0; display: flex; flex-direction: column; background-color: var(--header-bg); min-height: 0; }
-:deep(.spatial-scene-title), :deep(.spatial-mode-switch), :deep(.spatial-scene-hint), :deep(.spatial-scene-legend) { display: none !important; }
-:deep(.spatial-scene) { position: absolute; top: 0; left: 0; right: 0; bottom: 40px; background: transparent; overflow: hidden; }
-:deep(.spatial-scene canvas) { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: block; }
-.custom-legend { position: absolute; bottom: 0; left: 0; right: 0; height: 40px; background: var(--header-bg); display: flex; align-items: center; padding: 0 20px; gap: 16px; font-size: 12px; color: var(--text-sub); border-top: 1px solid var(--border-color); z-index: 10; }
-.custom-legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
-.dot.x { background: #ef4444; } .dot.y { background: #10b981; } .dot.z { background: #3b82f6; } .dot.drone { background: #14b8a6; }
-.target-count { margin-left: auto; font-weight: 600; color: var(--text-main); }
-.cameras-body { padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow: hidden; background: transparent; }
-.camera-wrapper { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: 12px; }
-.camera-btn-group { position: absolute; top: 8px; right: 8px; z-index: 99; display: flex; gap: 6px; }
-.camera-action-btn { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; background: rgba(255, 255, 255, 0.9); border: 1px solid #cbd5e1; border-radius: 6px; color: #475569; cursor: pointer; }
-.error-overlay { position: absolute; top: 44px; left: 0; right: 0; bottom: 0; background: rgba(30, 41, 59, 0.95); display: flex; flex-direction: column; align-items: center; justify-content: center; color: #cbd5e1; z-index: 50; border-radius: 0 0 12px 12px; padding: 16px; box-sizing: border-box; }
-.error-icon { color: #f87171; margin-bottom: 8px; flex-shrink: 0; }
-.error-title { margin: 0 0 20px 0; font-size: 14px; font-weight: 500; color: #f8fafc; text-align: center; flex-shrink: 0; }
-.retry-btn { display: flex; align-items: center; gap: 6px; background: #3b82f6; color: white; border: 0; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; transition: background 0.2s; flex-shrink: 0; }
-.retry-btn:hover { background: #2563eb; }
-:deep(.dc-camera-panel .dc-camera-placeholder), :deep(.dc-camera-panel .error-message), :deep(.dc-camera-panel .dc-camera-error), :deep(.dc-camera-panel .dc-camera-overlay), :deep(.dc-camera-panel .dc-camera-status-text) { display: none !important; }
-:deep(.dc-camera-panel) { flex: 1; min-height: 0; height: 100%; display: flex; flex-direction: column; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; background: transparent; }
-:deep(.dc-camera-panel > header) { height: 44px; flex-shrink: 0; background: var(--header-bg); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; padding: 0 16px; padding-right: 76px; }
-:deep(.dc-camera-panel > header svg) { display: none; }
-:deep(.dc-camera-panel > header strong) { color: var(--text-main); }
-:deep(.dc-camera-meta) { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--text-sub); }
-:deep(.dc-camera-viewport) { flex: 1; min-height: 0; height: 100%; background: #cbd5e1; position: relative; overflow: hidden; }
-:deep(.dc-camera-viewport canvas) { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
-.start-btn { display: flex; align-items: center; gap: 6px; background: #059669; color: #ffffff; border: 0; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; flex-shrink: 0; transition: background 0.2s; }
-.start-btn:hover:not(:disabled) { background: #047857; }
-.start-btn.is-stop { background: #ef4444; }
-.start-btn.is-stop:hover:not(:disabled) { background: #dc2626; }
-.start-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.header-actions { display: flex; align-items: center; gap: 8px; }
-.icon-action-btn { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: transparent; border: 1px solid transparent; border-radius: 6px; color: var(--text-sub); cursor: pointer; transition: all 0.2s; }
-.icon-action-btn:hover { background: #f1f5f9; color: var(--text-main); }
-.spin { animation: spin 1s linear infinite; }
-@keyframes spin { 100% { transform: rotate(360deg); } }
-
-/* 👇 新增 3D/2D 切换按钮样式 */
-.mode-switch {
-  display: flex;
-  background: rgba(148, 163, 184, 0.1);
-  border-radius: 6px;
-  padding: 2px;
-  margin-right: 8px;
-}
-.mode-switch button {
-  padding: 4px 12px;
-  border: none;
-  background: transparent;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-sub);
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.mode-switch button.active {
-  background: var(--header-bg);
-  color: #3b82f6;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-}
-
-.panel-card:fullscreen, .camera-wrapper:fullscreen, .panel-card:fullscreen :deep(.dc-camera-panel), .camera-wrapper:fullscreen :deep(.dc-camera-panel) { border-radius: 0 !important; border: none !important; width: 100vw !important; height: 100vh !important; display: flex !important; flex-direction: column !important; background: var(--header-bg) !important; }
-.panel-card:fullscreen :deep(.dc-camera-viewport), .camera-wrapper:fullscreen :deep(.dc-camera-viewport) { flex: 1 !important; height: 100% !important; }
-.panel-card:fullscreen .header-actions, .camera-wrapper:fullscreen .camera-btn-group { display: none !important; }
-</style>

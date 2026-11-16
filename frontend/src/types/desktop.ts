@@ -1,0 +1,2 @@
+export interface DesktopWindowState { maximized:boolean; minimized:boolean; fullscreen:boolean; pane:'main'|'scene'|'video' }
+declare global { interface Window { yuntongDesktop?: { platform:string; minimize():Promise<DesktopWindowState>; maximize():Promise<DesktopWindowState>; close():Promise<void>; windowState():Promise<DesktopWindowState>; onWindowState(callback:(state:DesktopWindowState)=>void):()=>void } } }

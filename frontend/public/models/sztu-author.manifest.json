@@ -1,0 +1,23 @@
+{
+  "id": "sztu-author-2024",
+  "source": "https://my.spline.design/untitled-aa64f4618ea03774ddb42bdc644ea535/",
+  "sourceSha256": "dd3c4c4154e3e586f52a8c419c0b47d049c470dad045ce0652bc93cb68300f5c",
+  "meshes": 703,
+  "triangles": 3184690,
+  "points": 6352734,
+  "bounds": {
+    "min": [
+      -513.5241097128886,
+      -11.777012020513741,
+      -484.67023119154646
+    ],
+    "max": [
+      513.5227596546715,
+      88.11469405193164,
+      487.7017477962463
+    ]
+  },
+  "geometry": "Original author Draco streams and transforms, no simplification",
+  "appearance": "Original author color layers; source texture image data absent",
+  "units": "author model units; requires explicit scene registration"
+}

@@ -1,0 +1,67 @@
+云瞳 AIRSPACE · 实时监控产品版 v9
+
+运行结构
+Web 与 Electron 共用 Vue 3 实时监控页面和 Node.js / SQLite 服务。
+默认同屏显示左侧三维校园与右侧视频墙，无常驻设备列、无其他业务模块导航。
+已有账号、事件和媒体数据继续保留，升级不会清空用户数据。
+
+启动
+需要 Node.js 22.13 或以上版本，在仓库根目录运行：
+  .\启动Web产品.ps1
+  .\启动桌面产品.ps1
+首次运行创建管理员账号，没有预设密码。
+Web 默认 http://127.0.0.1:8000/workbench，Electron 使用随机本地端口。
+桌面数据位于 %APPDATA%\YuntongAIRSPACE\data；Web 默认位于 backend/data。
+
+视频接入与操作
+点击视频墙工具栏“设备”打开设备浮层。C1/C2 为固定双目通道，可编辑连接配置；
+可新增独立 RTSP 通道，填写主机、端口、账号、密码、通道及路径。
+“测试端口”仅验证端口可达，不表示视频认证成功。
+视频通道在当前页显示时才发起新增流采集，离页 20 秒无订阅后回收。
+支持单屏、双屏、四分屏、九分屏、十六分屏；数量超过一页时分页或每 10 秒轮巡。
+拖拽可调整视频顺序。双击视频进入真实全屏；悬浮控件提供暂停/恢复、PNG 抓拍和全屏。
+本版本 JPEG 预览不含音频，因此不提供无效的静音按钮。
+抓拍保存实际显示帧；暂停后抓拍的是该暂停帧，不冒充当前最新画面。
+双目开始/停止监测位于设备浮层；必须有真实视频画面才允许启动。
+新增通道只提供视频预览，未宣称支持双目以外的 AI 融合定位。
+
+三维模型与现场配准
+frontend/public/models/sztu-author.glb 由作者公开的彩色 Spline 场景离线转换：
+https://my.spline.design/untitled-aa64f4618ea03774ddb42bdc644ea535/
+保留 703 个网格、原 Draco 几何与节点变换、原材质颜色，无减面，不是 PNG 或在线 iframe。
+本地 Draco 解码器与模型一起发布；请勿在源码打包时排除 .wasm 文件。
+作者发布的彩色场景与早期 707 对象 OBJ 附件不是相同版本；未声称补齐附件缺失贴图。
+平面和斜视操作同一模型，初始视角适应窗口；鼠标旋转/平移/滚轮缩放，Home 复位。
+“恢复校园全景”按钮恢复当前平面/透视模式的完整视野、缩放与朝向，停止跟随和自动环绕，
+清除拖动/平移惯性并显示完成反馈；已处于全景时也明确告知操作完成。
+透视模式可自动环绕。选中真实目标后可跟随或聚焦其关联视频。
+在“设备”浮层中打开“模型坐标配准”，保存现场测量参数：
+  模型坐标 = origin + rotationY(yawDeg) × 定位坐标 × scale
+scale 为模型单位/米，origin 为模型坐标；两种坐标的 Y 轴均竖直。
+可给新增相机录入同一米制坐标系中的位置，以及真实朝向/视场角/视域距离。
+C1/C2 优先使用服务提供的有效标定坐标；缺失的坐标不会自动编造默认基线。
+未配准时模型仍可查看，但不会将随意位置展示成真实相机/目标。
+航迹只记录最近 60 秒的实际有效观测；检测停止、目标失效或配准改变时清理。
+
+双窗口与桌面
+拖动中央分隔条调整比例，双击恢复默认比例；键盘左右键也可调整。
+点击区域右上角弹出按钮可把三维或视频墙独立打开，选择与关联视频聚焦会跨窗同步。
+Web 需允许本站弹出窗口。Electron 仅允许受控的同源三维/视频子窗口。
+Electron 原生最小化、最大化/还原、关闭与全屏均已接入；Web 不显示假的系统窗口按钮。
+
+构建和验证
+  npm --prefix frontend run build
+  node --test frontend/tests/control-actions.test.cjs
+  npm --prefix backend test
+  python -m unittest discover -s camera-rtsp-low-latency -p test_monitor_capture.py
+  npm --prefix desktop-app run test:product-actions
+  npm --prefix desktop-app run test:scene-reset
+  npm --prefix desktop-app run desktop:pack
+  npm --prefix desktop-app run test:product-runtime
+目录包位于 desktop-app/outputs/win-unpacked，保留全部文件并运行 YuntongWorkbench.exe。
+测试使用独立数据与视频夹具，不复用真实用户数据。
+
+验收边界
+界面及真实 API、离线模型、抓拍下载、视频帧处理与桌面窗口交互均有本地测试。
+部署现场的 RTSP 连通性、TensorRT 性能、相机标定与模型配准精度仍须使用现场硬件实测。
+未接入时显示离线/未配准状态，不使用生成图片或预设航迹填充成在线数据。

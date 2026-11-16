@@ -1,0 +1,7 @@
+import {nextTick,onUnmounted,watch} from 'vue';
+export function useDialogFocus(open:()=>boolean,selector:string,close:()=>void){
+ let previous:HTMLElement|null=null;
+ function keydown(event:KeyboardEvent){if(!open())return;const dialog=document.querySelector<HTMLElement>(selector);if(!dialog)return;if(event.key==='Escape'){event.preventDefault();close();return}if(event.key!=='Tab')return;const items=Array.from(dialog.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]')).filter(el=>el.getClientRects().length);if(!items.length){event.preventDefault();dialog.focus();return}const first=items[0],last=items.at(-1)!;if(event.shiftKey&&(document.activeElement===first||!dialog.contains(document.activeElement))){event.preventDefault();last.focus()}else if(!event.shiftKey&&(document.activeElement===last||!dialog.contains(document.activeElement))){event.preventDefault();first.focus()}}
+ watch(open,async value=>{if(value){previous=document.activeElement as HTMLElement;document.addEventListener('keydown',keydown);await nextTick();const dialog=document.querySelector<HTMLElement>(selector);dialog?.querySelector<HTMLElement>('input:not(:disabled),button:not(:disabled)')?.focus()}else{document.removeEventListener('keydown',keydown);if(previous?.isConnected)previous.focus()}},{flush:'post'});
+ onUnmounted(()=>document.removeEventListener('keydown',keydown));
+}

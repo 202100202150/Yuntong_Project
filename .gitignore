@@ -92,3 +92,12 @@ Thumbs.db
 /desktop-app/work/
 /cudart64_12.dll
 /云瞳AIRSPACE_UAVGuard_AI开发移交_2026-09-04/
+
+# 产品后端和桌面持久数据、构建暂存
+.env.*
+!.env.example
+backend/data/
+desktop-app/product-runtime/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

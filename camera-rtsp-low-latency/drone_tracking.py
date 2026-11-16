@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import math
+import os
 from typing import Any
 
 import numpy as np
@@ -25,6 +26,10 @@ class DronePositionTracker:
     MAX_SPEED_MPS = 30.0
 
     def __init__(self) -> None:
+        hold = float(os.getenv('CAMERA_HOLD_SECONDS', '0.45'))
+        if not math.isfinite(hold) or not 0 <= hold <= 3:
+            raise ValueError('CAMERA_HOLD_SECONDS must be between 0 and 3')
+        self.HOLD_SECONDS = hold
         self._tracks: dict[int, _Track] = {}
         self._next_id = 1
         self._last_sample_at = -math.inf
